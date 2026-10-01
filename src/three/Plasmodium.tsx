@@ -35,6 +35,9 @@ const GLOW_FROM = 0.55
 const VEIN_FLOOR = 3
 const VEIN_TOP = 420
 const LOG_NORM = Math.log1p(VEIN_TOP / VEIN_FLOOR)
+/** Log-spaced bins used to auto-expose the tube network. */
+const BINS = 48
+const BIN_SCALE = BINS / LOG_NORM
 const SLIME_REF = 24
 /** Tube thickness that counts as fully established, for brightness and density. */
 
@@ -95,6 +98,17 @@ export function Plasmodium() {
   }, [veins, glow, slime])
 
   const veinThreshold = useRef(2)
+  /**
+   * Auto-exposure. A fixed colour ramp cannot serve both a young colony, where
+   * every tube is thin and needs lifting, and a mature one covering the plate,
+   * where the same mapping turns everything into mush. So the ramp is fitted to
+   * the network that is actually there: a histogram of the last rebuild gives
+   * the window between the median tube and the heaviest few percent, and the
+   * colour runs across that. Quiet ground stays dark whatever the colony is
+   * doing, and the working routes always read.
+   */
+  const expose = useRef({ lo: 0.08, hi: 0.75 })
+  const histogram = useRef(new Int32Array(BINS))
   const slimeThreshold = useRef(1.2)
   const tick = useRef(0)
 
@@ -121,6 +135,10 @@ export function Plasmodium() {
       const gc = glow.color
       const gs = glow.size
       const thr = veinThreshold.current
+      const hist = histogram.current
+      hist.fill(0)
+      const { lo, hi } = expose.current
+      const span = Math.max(0.05, hi - lo)
       let k = 0
       let g = 0
       for (let z = r.z0; z <= r.z1; z++) {
@@ -131,10 +149,11 @@ export function Plasmodium() {
             const i = row + x
             const v = data[i]
             if (v <= thr) continue
-            // How established this stretch is, 0..1 on a log scale. Brightness
-            // and density both key off it, so a walked path reads as a cool
-            // slate thread and a working vein as hot gold cord.
-            const q = Math.min(1, Math.log1p(v / VEIN_FLOOR) / LOG_NORM)
+            // Where this stretch sits on the log scale of tube thickness...
+            const raw = Math.min(1, Math.log1p(v / VEIN_FLOOR) / LOG_NORM)
+            hist[Math.min(BINS - 1, (raw * BINS) | 0)]++
+            // ...and where that falls inside the exposure window.
+            const q = raw <= lo ? 0 : raw >= hi ? 1 : (raw - lo) / span
             const q2 = q * q
             const many = 1 + ((q * 6) | 0)
             for (let m = 0; m < many; m++) {
@@ -183,6 +202,26 @@ export function Plasmodium() {
           if (k >= VEIN_BUDGET) break
         }
         if (k >= VEIN_BUDGET) break
+      }
+      // Fit the window for the next rebuild: from the median tube up to the
+      // heaviest two percent, eased so the view does not flicker.
+      let total = 0
+      for (let bi = 0; bi < BINS; bi++) total += hist[bi]
+      if (total > 200) {
+        const loTarget = total * 0.5
+        const hiTarget = total * 0.98
+        let acc = 0
+        let loBin = 0
+        let hiBin = BINS - 1
+        for (let bi = 0; bi < BINS; bi++) {
+          acc += hist[bi]
+          if (acc < loTarget) loBin = bi
+          if (acc < hiTarget) hiBin = bi
+        }
+        const wantLo = loBin / BIN_SCALE / LOG_NORM
+        const wantHi = Math.max(wantLo + 0.1, (hiBin + 1) / BIN_SCALE / LOG_NORM)
+        expose.current.lo += (wantLo - expose.current.lo) * 0.15
+        expose.current.hi += (wantHi - expose.current.hi) * 0.15
       }
       if (k >= VEIN_BUDGET) veinThreshold.current = thr * 1.18 + 0.4
       else if (k < VEIN_BUDGET * 0.6 && thr > 2) veinThreshold.current = Math.max(2, thr * 0.93)

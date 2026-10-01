@@ -56,11 +56,11 @@ function Motes() {
   const cloud = useMemo(
     () =>
       createPointCloud(capacity, {
-        opacity: 0.9,
+        opacity: 0.55,
         additive: true,
         depthWrite: false,
-        minPixels: 1,
-        maxPixels: 4,
+        minPixels: 0.6,
+        maxPixels: 1.9,
       }),
     [capacity],
   )
@@ -100,7 +100,7 @@ function Motes() {
         color[o] = 0.34
         color[o + 1] = 0.17
         color[o + 2] = 0.05
-        size[k] = 0.24
+        size[k] = 0.16
       } else {
         const t = c.satiety[i]
         // Exploring tips read cold and cyan; fed, transporting plasmodium is warm.
@@ -117,16 +117,19 @@ function Motes() {
         color[o] = (r + (al0 - r) * fear) * br
         color[o + 1] = (g + (al1 - g) * fear) * br
         color[o + 2] = (b2 + (al2 - b2) * fear) * br
-        size[k] = (0.26 + Math.min(1, c.biomass[i] / 24) * 0.22) * (1 + 0.35 * Math.abs(mood))
+        size[k] = (0.1 + Math.min(1, c.biomass[i] / 24) * 0.13) * (1 + 0.3 * Math.abs(mood))
       }
       k++
     }
     // A colony of twenty thousand motes should not paint a solid wall of light:
     // thin them as the population climbs so the advancing front stays readable.
-    const crowd = Math.max(0.62, Math.min(1, Math.sqrt(3500 / Math.max(k, 1))))
+    // Nuclei are texture within the body, not the body itself. A plate carrying
+    // tens of thousands of them must not render as a flat field of speckle, so
+    // they thin hard as the population climbs and let the tube network read.
+    const crowd = Math.max(0.3, Math.min(1, Math.sqrt(2000 / Math.max(k, 1))))
     const mat = cloud.points.material as THREE.ShaderMaterial
-    mat.uniforms.uOpacity.value = 0.95 * crowd
-    mat.uniforms.uMax.value = 4 * crowd
+    mat.uniforms.uOpacity.value = 0.6 * crowd
+    mat.uniforms.uMax.value = 1.9 * crowd
     flushCloud(cloud, k)
   })
 

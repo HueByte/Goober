@@ -127,6 +127,15 @@ const CONDUCTANCE_KM = 40
 const CIRCULATION_TARGET = 0.6
 /** Biomass density above which the body is too crowded to thicken further. */
 const CROWDING_LIMIT = 150
+/**
+ * Biomass that has to be around a mote, besides itself, for it to count as part
+ * of the organism. A plasmodium is one cell: a single nucleus that has wandered
+ * off is not a colony and cannot start one. Without this, a stray mote lands on a
+ * deposit the body has not reached yet, feeds, divides, and a satellite blob
+ * appears out of nowhere - which robs the whole thing of the moment where the
+ * front actually arrives.
+ */
+const CONNECTION_FLOOR = 11
 /** Substrate concentration at which a mote is half as excited as it can get. */
 const EXCITE_KM = 2.5
 /** Repellent load that counts as outright alarming. */
@@ -1068,7 +1077,10 @@ export class Colony {
     // rest diffuses away and decays.
     // Most of what a deposit releases diffuses away and decays before anything
     // reaches it, so the ration has to be several times the bare upkeep.
-    const capture = 0.18
+    // Calibrated against a colony that is actually feeding: measured, this holds
+    // biomass flat over three days, where twice it doubles the colony and half it
+    // starves back.
+    const capture = 0.45
     return upkeepUg / 1000 / carbPerMg / capture
   }
 
@@ -1703,7 +1715,10 @@ export class Colony {
         // stores. A mote with nothing in it leaves barely a mark, so a starving
         // colony searching across bare agar does not slowly paint over the whole
         // plate - only routes that carried something stay visible.
-        const flux = bm * Math.max(0, sat - 0.12) * 1.3 * (1 - 0.8 * fear)
+        // Tube is built by the organism, not by a stray nucleus: an unreached
+        // deposit stays dark until the body gets there.
+        const attached = this.bio.nearest(nx, ny, nz) - bm > CONNECTION_FLOOR
+        const flux = bm * Math.max(0, sat - 0.12) * 1.3 * (1 - 0.8 * fear) * (attached ? 1 : 0.12)
         this.vein.data[vi] =
           have + VEIN_GAIN * michaelis(flux, VEIN_FLUX_KM) * (1 - have / VEIN_MAX) * dt
       }
@@ -1863,9 +1878,12 @@ export class Colony {
         continue
       }
       // Thickening where the body is already thick achieves nothing; the colony
-      // puts new mass at its margins and on its food.
-      const crowded = this.bio.nearest(nx, ny, nz) > CROWDING_LIMIT
-      if (bm > BIO.life.divideBiomassUg && !crowded) {
+      // puts new mass at its margins and on its food. And it only divides where
+      // it is actually part of the organism.
+      const around = this.bio.nearest(nx, ny, nz) - bm
+      const crowded = around > CROWDING_LIMIT
+      const connected = around > CONNECTION_FLOOR
+      if (bm > BIO.life.divideBiomassUg && !crowded && connected) {
         const j = this.spawn()
         if (j >= 0) {
           const half = bm * 0.5
