@@ -431,5 +431,5 @@ FodyWeavers.xsd
 # Node / Vite
 node_modules/
 dist/
-.simtest/
+.simtest*/
 *.tsbuildinfo

@@ -37,6 +37,7 @@ function SimDriver() {
       const t0 = performance.now()
       substeps = colony.advance(dt, speed).substeps
       stepMs = performance.now() - t0
+      useStore.getState().tickAutoFeed()
     }
 
     lastPush.current += dt

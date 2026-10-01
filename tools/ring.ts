@@ -33,8 +33,9 @@ function profile(label: string) {
       const b = Math.floor(d / BIN)
       if (b >= BINS) continue
       for (let y = 1; y <= 5; y++) {
-        carb[b] += c.carb.data[x + grid * (y + grid * z)]
-        prot[b] += c.prot.data[x + grid * (y + grid * z)]
+        const i = c.lattice.index(x, y, z)
+        carb[b] += c.carb.data[i]
+        prot[b] += c.prot.data[i]
         cells[b]++
       }
     }

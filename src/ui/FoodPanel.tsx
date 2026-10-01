@@ -9,6 +9,7 @@ import {
   yieldPotential,
 } from '../sim/foods'
 import { colony, useStore } from '../state/store'
+import type { ScatterSource } from '../state/store'
 import type { FoodCategory, TraceId } from '../sim/types'
 import { Row, Section, Slider, Tag, fmt } from './controls'
 
@@ -18,6 +19,7 @@ const CATEGORY_LABEL: Record<FoodCategory, string> = {
   protein: 'Nitrogen sources',
   complex: 'Complex / whole foods',
   defined: 'Defined media',
+  stimulus: 'Cues and controls',
   antagonist: 'Antagonists',
 }
 
@@ -27,8 +29,16 @@ const CATEGORY_ORDER: FoodCategory[] = [
   'protein',
   'carbohydrate',
   'complex',
+  'stimulus',
   'antagonist',
 ]
+
+const SCATTER_HINT: Record<ScatterSource, string> = {
+  selected: 'Only the food selected above, which is the controlled version: one variable, scattered at random positions.',
+  assorted: 'A random draw from everything edible. Composition varies deposit to deposit, so the colony has to choose where to put its mass rather than simply spreading.',
+  chaotic:
+    'The whole larder, antagonists included - roughly one deposit in four is salt, quinine, copper, acid or something else it would rather not have found. This is what an uncontrolled surface actually offers.',
+}
 
 function ratio(v: number): string {
   if (!isFinite(v)) return 'all protein'
@@ -49,6 +59,14 @@ export function FoodPanel() {
   const toggleScatterRation = useStore((s) => s.toggleScatterRation)
   const scatterHours = useStore((s) => s.scatterHours)
   const setScatterHours = useStore((s) => s.setScatterHours)
+  const scatterSource = useStore((s) => s.scatterSource)
+  const setScatterSource = useStore((s) => s.setScatterSource)
+  const autoFeed = useStore((s) => s.autoFeed)
+  const toggleAutoFeed = useStore((s) => s.toggleAutoFeed)
+  const autoFeedHours = useStore((s) => s.autoFeedHours)
+  const setAutoFeedHours = useStore((s) => s.setAutoFeedHours)
+  const autoFeedReach = useStore((s) => s.autoFeedReach)
+  const setAutoFeedReach = useStore((s) => s.setAutoFeedReach)
   const inspect = useStore((s) => s.inspect)
 
   const def = FOOD_BY_ID[selectedFoodId]
@@ -59,6 +77,11 @@ export function FoodPanel() {
   const instanceDef = instance ? FOOD_BY_ID[instance.defId] : undefined
 
   const traceRows = (Object.keys(def.traces) as TraceId[]).filter((t) => (def.traces[t] ?? 0) > 0)
+  // The ration, stated in the units the question is actually asked in: what the
+  // colony burns per hour, and what that comes to over the window chosen. A
+  // number nobody can derive is a number nobody trusts.
+  const rationTotal = colony.rationMassMg(selectedFoodId, scatterHours)
+  const upkeepPerHour = scatterHours > 0 ? rationTotal / scatterHours : 0
 
   return (
     <div className="panel-body">
@@ -105,8 +128,9 @@ export function FoodPanel() {
           digits={0}
           onChange={(v) => setPlaceMass(v)}
         />
+        <h4 className="field-head">Scatter at random</h4>
         <Slider
-          label="Scatter count"
+          label="How many deposits"
           value={scatterCount}
           min={1}
           max={40}
@@ -114,37 +138,112 @@ export function FoodPanel() {
           digits={0}
           onChange={setScatterCount}
         />
-        <button
-          className={`ghost-btn ${scatterRation ? 'active' : ''}`}
-          onClick={toggleScatterRation}
-        >
-          {scatterRation ? 'upkeep ration' : 'fixed mass'}
-        </button>
-        {scatterRation && (
-          <Slider
-            label="Ration covers"
-            value={scatterHours}
-            min={1}
-            max={48}
-            step={1}
-            unit=" h"
-            digits={0}
-            onChange={setScatterHours}
-          />
+
+        <label className="field-label">What to drop</label>
+        <div className="btn-row">
+          {(['selected', 'assorted', 'chaotic'] as ScatterSource[]).map((s) => (
+            <button
+              key={s}
+              className={`ghost-btn ${scatterSource === s ? 'active' : ''}`}
+              onClick={() => setScatterSource(s)}
+              title={SCATTER_HINT[s]}
+            >
+              {s === 'selected' ? 'this food' : s === 'assorted' ? 'mixed' : 'anything'}
+            </button>
+          ))}
+        </div>
+        <p className="note">{SCATTER_HINT[scatterSource]}</p>
+
+        <label className="field-label">How much</label>
+        <div className="btn-row">
+          <button
+            className={`ghost-btn ${scatterRation ? 'active' : ''}`}
+            onClick={() => scatterRation || toggleScatterRation()}
+          >
+            just enough to live on
+          </button>
+          <button
+            className={`ghost-btn ${scatterRation ? '' : 'active'}`}
+            onClick={() => scatterRation && toggleScatterRation()}
+          >
+            a set amount
+          </button>
+        </div>
+        {scatterRation ? (
+          <>
+            <Slider
+              label="Enough to last"
+              value={scatterHours}
+              min={1}
+              max={48}
+              step={1}
+              unit=" h"
+              digits={0}
+              onChange={setScatterHours}
+            />
+            <p className="note">
+              The colony is burning {fmt(upkeepPerHour, 2)} mg an hour just staying alive, so{' '}
+              {scatterHours} h of that is <strong>{fmt(rationTotal, 1)} mg</strong> - about{' '}
+              {fmt(rationTotal / Math.max(1, scatterCount), 1)} mg in each of the {scatterCount}{' '}
+              deposits. Drop that and it holds its current size: no boom, no die-back. Less and it
+              shrinks; more and it grows.
+            </p>
+          </>
+        ) : (
+          <p className="note">
+            Every deposit is the <strong>{fmt(mass, 0)} mg</strong> set above, whatever size the
+            colony happens to be - so the same button feeds a seedling and starves a mature network.
+          </p>
         )}
-        <button className="ghost-btn" onClick={() => scatterFood(scatterCount)}>
-          scatter {scatterCount} at random
-          {scatterRation ? ` (${fmt(colony.rationMassMg(selectedFoodId, scatterHours), 1)} mg)` : ''}
+
+        <label className="field-label">Keep it fed</label>
+        <div className="btn-row">
+          <button
+            className={`ghost-btn ${autoFeed ? 'active' : ''}`}
+            onClick={toggleAutoFeed}
+          >
+            {autoFeed ? 'drip feed on' : 'drip feed off'}
+          </button>
+        </div>
+        {autoFeed && (
+          <>
+            <Slider
+              label="A scatter every"
+              value={autoFeedHours}
+              min={0.5}
+              max={24}
+              step={0.5}
+              unit=" h"
+              digits={1}
+              onChange={setAutoFeedHours}
+            />
+            <Slider
+              label="Dropped within"
+              value={autoFeedReach}
+              min={5}
+              max={200}
+              step={5}
+              unit=" mm"
+              digits={0}
+              onChange={setAutoFeedReach}
+            />
+          </>
+        )}
+        <p className="note">
+          {autoFeed
+            ? `Every ${autoFeedHours} simulated hours, ${scatterCount} deposits land at random within ${autoFeedReach} mm of wherever the colony has got to. Set the reach wide and it has to keep travelling to eat; set it narrow and it settles where it is. The clock is in simulated time, so it means the same thing whatever speed you watch at.`
+            : 'Off: the plate only gets what you put on it, so the colony eats what is there and then stops.'}
+        </p>
+
+        <button className="ghost-btn wide" onClick={() => scatterFood(scatterCount)}>
+          drop {scatterCount}{' '}
+          {scatterRation ? `(${fmt(rationTotal, 1)} mg in total)` : `(${fmt(mass, 0)} mg each)`}
         </button>
         <p className="note">
           Each lands on whatever is highest at that spot, so deposits end up on top of blocks and
           platforms as well as on the agar.
         </p>
-        <p className="note">
-          {scatterRation
-            ? 'Upkeep ration: the total mass is calculated from what the colony burns on maintenance respiration over that window, so it holds its size rather than booming or starving back. It scales with the colony, so the same button keeps working as it grows.'
-            : 'Fixed mass: every deposit is the mass set above, whatever size the colony happens to be.'}
-        </p>
+
 
         <div className="kv-grid">
           <Row label="Dry matter" value={`${fmt(a.dryMatter)} g / 100 g`} />

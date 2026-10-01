@@ -34,7 +34,7 @@ import {
   temperatureFactor,
 } from './biology'
 import { EnvGrid } from './env'
-import { Field3D, depositSphere } from './field'
+import { BRICK, ByteField3D, FIELD_EPS, Field3D, Lattice, depositSphere } from './field'
 import type { FieldRegion, Obstacles } from './field'
 import {
   MATERIALS,
@@ -65,8 +65,46 @@ import type {
 /** Fixed integration step, in simulated minutes. */
 export const FIXED_STEP_MIN = 0.25
 
+/**
+ * Bytes of field storage per voxel. Five fields plus three masks, and the three
+ * diffusible fields need a scratch buffer each.
+ */
+export const BYTES_PER_VOXEL = 35
+/** Bytes a single 16 mm brick costs once something is written into it. */
+export const BYTES_PER_BRICK = BRICK ** 3 * BYTES_PER_VOXEL
+
+/**
+ * The largest vessel edge, in millimetres.
+ *
+ * A metre at one millimetre is 10^9 voxels, which stored densely would be tens
+ * of gigabytes. It is not stored densely: the lattice is cut into bricks and a
+ * brick is paid for only once something is written into it, so an empty metre
+ * costs a megabyte of brick table and nothing else. What is capped is therefore
+ * not the vessel but how much of it the colony may occupy at once, and that is
+ * the memory budget below.
+ */
+export function maxGridSize(): number {
+  return 1000
+}
+
+/**
+ * Default ceiling on field storage. Reaching it does not fail or restart
+ * anything: writes outside the bricks already allocated are discarded, so the
+ * colony simply stops being able to spread further.
+ */
+export const DEFAULT_FIELD_BUDGET_MB = 256
+
+export function bricksForBudget(megabytes: number): number {
+  // A save written before this setting existed has no value for it, and a NaN
+  // budget is an unbounded one - so the default stands in for anything that is
+  // not a usable number.
+  const mb = Number.isFinite(megabytes) && megabytes > 0 ? megabytes : DEFAULT_FIELD_BUDGET_MB
+  return Math.max(64, Math.floor((mb * 1048576) / BYTES_PER_BRICK))
+}
+
 export const DEFAULT_PARAMS: SimParams = {
   grid: 96,
+  fieldBudgetMb: DEFAULT_FIELD_BUDGET_MB,
   maxMotes: 45000,
   minutesPerSecond: 20,
   sensorDistance: 1.7,
@@ -83,7 +121,7 @@ export const DEFAULT_PARAMS: SimParams = {
   depositRate: 6,
   trailDecayPerMin: 0.035,
   trailDiffusion: 0.12,
-  veinDecayPerMin: 0.0012,
+  veinDecayPerMin: 0.003,
   // One voxel is 1 mm and one step is 0.25 min, so a mixing coefficient m is a
   // diffusion coefficient of m/6/0.25 mm^2/min. Glucose in dilute agar is about
   // 0.04 mm^2/min (6.7e-6 cm^2/s), which is m = 0.06.
@@ -136,6 +174,47 @@ const CROWDING_LIMIT = 150
  * front actually arrives.
  */
 const CONNECTION_FLOOR = 11
+/**
+ * Biomass density, ug per voxel, at which a nucleus is fully carried by the
+ * cytoplasm around it.
+ *
+ * A plasmodium is one cell. There is no such thing as a nucleus walking off
+ * across bare agar on its own - the front advances as a sheet of cytoplasm, and
+ * a nucleus goes where that cytoplasm goes. Without this the swarm advances at
+ * the pace of its fastest individual rather than the pace of a body, which is
+ * how deposits end up being eaten by a dust of arrivals before anything has
+ * reached them.
+ */
+const SUPPORT_KM = 16
+/** How fast a nucleus can move with no cytoplasm around it at all. */
+const UNSUPPORTED_SPEED = 0.45
+/**
+ * Weight on the volatile attractant, relative to the substrate terms. A smell is
+ * worth following, but it is a promise rather than a meal, so it is deliberately
+ * cheaper per unit than the dissolved nutrient it is meant to advertise.
+ */
+const LURE_SCALE = 2.4
+/** How much of a smell counts as a find, for the purpose of getting excited. */
+const LURE_EXCITE = 1.6
+/** How completely a narcotic can arrest streaming. */
+const NARCOSIS_SCALE = 2.2
+/**
+ * How far a deposit has to be worn down before what is left of it counts as
+ * crumbs rather than an object.
+ */
+/** Satiety above which a nucleus has nothing left to look for. */
+const SETTLED_SATIETY = 0.7
+/** Local substrate, ug per voxel, that counts as sitting on a meal. */
+const SETTLED_FOOD = 0.4
+/** How often a settled nucleus looks up to see whether anything has changed. */
+const SETTLED_RECHECK = 12
+/** What is left of its motility: enough to pack, not enough to orbit. */
+const SETTLED_DRIFT = 0.12
+const RESIDUE_CLEARS = 0.25
+/** How many deposits may sit on the plate at once. */
+const MAX_DEPOSITS = 120
+/** How fast a deposit's own water merges into the agar, against its solute. */
+const WATER_DISPERSAL = 0.25
 /** Substrate concentration at which a mote is half as excited as it can get. */
 const EXCITE_KM = 2.5
 /** Repellent load that counts as outright alarming. */
@@ -181,29 +260,62 @@ const REGION_MARGIN = 4
  * the network prunes itself down to the routes that are actually carrying food.
  */
 const VEIN_GAIN = 16
-const VEIN_FLUX_KM = 9
+const VEIN_FLUX_KM = 6
 const VEIN_MAX = 420
 /** Tube thickness that counts as a real vein for the read-outs. */
 const VEIN_VISIBLE = 8
+/**
+ * Tube thickness that still counts as being joined to the rest of the organism.
+ * Below this the strand has been reabsorbed and whatever is on the end of it is
+ * on its own.
+ */
+const TUBE_CONTACT = 5
+/**
+ * The thinnest strand the body can push out and hold open. An advancing front
+ * always leaves at least this much behind it, which is what makes the route it
+ * took visible from the moment it takes it.
+ */
+const TUBE_STRAND = 16
+/** How quickly that strand is laid, per simulated minute. */
+const TUBE_ADVANCE = 1.5
+/**
+ * How long an arm goes without finding anything before the organism starts
+ * taking it back rather than merely letting it wander. Withdrawal is the other
+ * half of how a plasmodium optimises: the routes that found nothing are
+ * actively reabsorbed, not just left to fade.
+ */
+const WITHDRAW_AFTER_MIN = 110
+/** How hard a withdrawing mote follows the tube network home. */
+const RETRACT_WEIGHT = 3.4
+/** Tube thickness at which "thicker, this way" stops being informative. */
+const RETRACT_KM = 90
+/**
+ * Weight on actual transport when thickening a tube, against mere occupancy.
+ * This is the Tero rule: a tube is reinforced by the cytoplasm flowing through
+ * it, so the routes between a food source and the growing front thicken and
+ * everything else is reabsorbed. Occupancy still counts for something, because
+ * a deposit being fed on is a real part of the network, but it is deliberately
+ * the smaller term - otherwise every place the colony sits becomes a trunk.
+ */
+const STREAM_GAIN = 2.6
+const OCCUPANCY_GAIN = 0.45
+/**
+ * Weight on traffic: cytoplasm moving along an existing tube, whatever it is
+ * carrying.
+ *
+ * This is what maintains the route between two deposits the colony is working.
+ * Neither end of such a route is where the feeding happens and neither is where
+ * the growing is, so nothing else in the model credits it - and a corridor that
+ * nothing credits is reabsorbed under the colony's own feet. A tube is held open
+ * by what passes through it, so passing through it is what holds it open.
+ */
+const TRANSIT_GAIN = 0.32
+/** The step a mote takes in a minute at the default advance speed. */
+const TRANSIT_REF = 0.12
 /** Surplus store voided per minute when one currency is at capacity. */
 const OVERFLOW_VOID_PER_MIN = 0.05
 /** Resolution of the environmental chemistry grid. */
 const ENV_GRID = 20
-/**
- * Hard ceiling on the vessel, in voxels. Five fields plus two masks, and the
- * three diffusible fields need a scratch buffer each, so a vessel costs about
- * 36 bytes per voxel: 2.4 M voxels is ~85 MB, which is about as much as is
- * reasonable to ask of a browser tab. Beyond this the allocation is what fails,
- * not the simulation, and a failed allocation takes the whole page with it.
- */
-export const MAX_VOXELS = 2_460_375 // 135^3
-/** Bytes of field storage per voxel, for the read-out. */
-export const BYTES_PER_VOXEL = 36
-
-/** The largest vessel edge that fits inside the voxel ceiling. */
-export function maxGridSize(): number {
-  return Math.floor(Math.cbrt(MAX_VOXELS) / 8) * 8
-}
 /**
  * Diffusion and the biomass map both run on a coarser cadence than the swarm.
  * Diffusion is linear, so accumulating several steps' worth and applying a
@@ -212,6 +324,24 @@ export function maxGridSize(): number {
  */
 const DIFFUSE_EVERY = 2
 const BIO_MAP_EVERY = 8
+/**
+ * How often tube reabsorption is applied. It is a slow exponential over hours,
+ * so doing it every step is a full sweep of the network for a change of four
+ * parts in a hundred thousand. Accumulated and applied on a coarse cadence it
+ * is the same curve for an eighth of the work.
+ */
+const VEIN_DECAY_EVERY = 8
+/** How often the slime trail is integrated. */
+const TRAIL_EVERY = 2
+/**
+ * How often ground the colony has left is handed back.
+ *
+ * A wandering organism would otherwise cost more and more the longer it ran,
+ * because every brick it ever touched stays allocated. Once a brick holds no
+ * substrate, no slime, no tube, no biomass and no structure, there is nothing
+ * in it to simulate or draw, and it goes back on the free list.
+ */
+const RECLAIM_EVERY = 400
 
 const TRACE_IDS: TraceId[] = ['K', 'P', 'Mg', 'Ca', 'Na', 'Fe', 'Zn', 'thiamine', 'heme']
 
@@ -243,26 +373,30 @@ export class Colony {
   env: EnvParams
 
   n: number
-  carb: Field3D
-  prot: Field3D
-  trail: Field3D
+  carb!: Field3D
+  prot!: Field3D
+  trail!: Field3D
   /** Persistent transport tubes: thickness, not concentration. */
-  vein: Field3D
-  bio: Field3D
-  envGrid: EnvGrid
+  vein!: Field3D
+  bio!: Field3D
+  envGrid!: EnvGrid
 
   foods: FoodInstance[] = []
   solids: SolidInstance[] = []
+  /** The shared brick table. Every field below is indexed through it. */
+  lattice!: Lattice
   /** 1 where a solid occupies the voxel. */
-  solidMask: Uint8Array
+  solidMask!: ByteField3D
   /** Adhesion available at this voxel, 0..255, from any solid within one voxel. */
-  gripField: Uint8Array
+  gripField!: ByteField3D
   /** 1 beside a sheer object: no purchase, and no way up. */
-  slipField: Uint8Array
+  slipField!: ByteField3D
   /** Steps taken, used to stagger per-mote work across the swarm. */
   private stepCount = 0
   private compactAt = 0
   private pendingDiffusionMin = 0
+  private pendingVeinMin = 0
+  private pendingTrailMin = 0
   private obstacles: Obstacles | undefined
   private region: FieldRegion
   timeMin = 0
@@ -280,6 +414,14 @@ export class Colony {
   satiety!: Float32Array
   /** Sag velocity, voxels per minute. Negative is downwards. */
   vy!: Float32Array
+  /**
+   * Cytoplasm this mote exchanged with the circulating pool on the previous
+   * step, micrograms. It is the only honest measure of transport available
+   * here - a mote donating at a deposit and one drawing at the front are both
+   * driving flow through the tube between them - and it is what the tube is
+   * thickened by.
+   */
+  streamed!: Float32Array
   /**
    * Arousal, -1 to 1. Positive is a mote that has caught a strong smell of food
    * and is driving towards it; negative is one in something it wants out of.
@@ -345,15 +487,7 @@ export class Colony {
     this.params = { ...params }
     this.env = { ...env }
     this.n = this.params.grid
-    this.carb = new Field3D(this.n)
-    this.prot = new Field3D(this.n)
-    this.trail = new Field3D(this.n)
-    this.vein = new Field3D(this.n, this.n, false)
-    this.bio = new Field3D(this.n, this.n, false)
-    this.envGrid = new EnvGrid(ENV_GRID, this.n)
-    this.solidMask = new Uint8Array(this.n ** 3)
-    this.gripField = new Uint8Array(this.n ** 3)
-    this.slipField = new Uint8Array(this.n ** 3)
+    this.allocateFields()
     this.region = { x0: 1, y0: 1, z0: 1, x1: 1, y1: 1, z1: 1 }
     this.allocate(this.params.maxMotes)
     this.rebuildSensorTable()
@@ -363,18 +497,35 @@ export class Colony {
   // Setup
   // -------------------------------------------------------------------------
 
-  /** Field storage for the current vessel size. Throws if it will not fit. */
+  /**
+   * Field storage for the current vessel.
+   *
+   * Nothing here is proportional to the vessel except the brick table, so this
+   * is cheap at any size; what the fields actually cost is decided later, one
+   * brick at a time, by where the colony goes.
+   */
   private allocateFields(): void {
     const n = this.n
-    this.carb = new Field3D(n)
-    this.prot = new Field3D(n)
-    this.trail = new Field3D(n)
-    this.vein = new Field3D(n, n, false)
-    this.bio = new Field3D(n, n, false)
+    this.lattice = new Lattice(n, bricksForBudget(this.params.fieldBudgetMb))
+    this.carb = new Field3D(this.lattice)
+    this.prot = new Field3D(this.lattice)
+    this.trail = new Field3D(this.lattice)
+    this.vein = new Field3D(this.lattice, false)
+    this.bio = new Field3D(this.lattice, false)
+    this.solidMask = new ByteField3D(this.lattice)
+    this.gripField = new ByteField3D(this.lattice)
+    this.slipField = new ByteField3D(this.lattice)
     this.envGrid = new EnvGrid(ENV_GRID, n)
-    this.solidMask = new Uint8Array(n ** 3)
-    this.gripField = new Uint8Array(n ** 3)
-    this.slipField = new Uint8Array(n ** 3)
+  }
+
+  /** Field memory actually committed, in bytes. */
+  get fieldBytes(): number {
+    return this.lattice.allocatedBytes
+  }
+
+  /** True once the colony has filled its memory budget and cannot spread further. */
+  get fieldBudgetReached(): boolean {
+    return this.lattice.exhausted
   }
 
   private allocate(cap: number): void {
@@ -389,6 +540,7 @@ export class Colony {
     this.pStore = new Float32Array(cap)
     this.satiety = new Float32Array(cap)
     this.vy = new Float32Array(cap)
+    this.streamed = new Float32Array(cap)
     this.mood = new Float32Array(cap)
     this.trait = new Float32Array(cap)
     this.state = new Uint8Array(cap)
@@ -450,6 +602,7 @@ export class Colony {
     permuteF(this.pStore)
     permuteF(this.satiety)
     permuteF(this.vy)
+    permuteF(this.streamed)
     permuteF(this.mood)
     permuteF(this.trait)
     permuteF(this.starveMin)
@@ -475,6 +628,18 @@ export class Colony {
   }
 
   setParams(p: Partial<SimParams>): void {
+    // Anything restored from an older save may be missing settings this build
+    // has since added.
+    if (!Number.isFinite(this.params.fieldBudgetMb)) {
+      this.params.fieldBudgetMb = DEFAULT_FIELD_BUDGET_MB
+    }
+    // The memory budget is live: it only changes how many more bricks may be
+    // handed out, so there is no need to restart anything for it.
+    if (p.fieldBudgetMb !== undefined && p.fieldBudgetMb !== this.params.fieldBudgetMb) {
+      this.params = { ...this.params, fieldBudgetMb: p.fieldBudgetMb }
+      this.lattice.maxBricks = bricksForBudget(p.fieldBudgetMb)
+      if (this.lattice.count < this.lattice.maxBricks) this.lattice.exhausted = false
+    }
     const gridChanged = p.grid !== undefined && p.grid !== this.params.grid
     const capChanged = p.maxMotes !== undefined && p.maxMotes !== this.params.maxMotes
     const sensorChanged = p.sensorCount !== undefined && p.sensorCount !== this.params.sensorCount
@@ -534,6 +699,7 @@ export class Colony {
   }
 
   reset(): void {
+    this.revision++
     this.carb.clear()
     this.prot.clear()
     this.trail.clear()
@@ -541,9 +707,10 @@ export class Colony {
     this.bio.clear()
     this.foods = []
     this.solids = []
-    this.solidMask.fill(0)
-    this.gripField.fill(0)
-    this.slipField.fill(0)
+    this.lattice.reset()
+    this.solidMask.clear()
+    this.gripField.clear()
+    this.slipField.clear()
     this.obstacles = undefined
     this.resetRegion()
     this.timeMin = 0
@@ -612,6 +779,7 @@ export class Colony {
 
   /** Drop a plasmodium inoculum: a knot of motes with a starter ration. */
   inoculate(x: number, y: number, z: number, count = 220, radius = 2): number {
+    this.revision++
     let made = 0
     // Under gravity an inoculum is a blob laid on a surface, not a ball hanging
     // in mid-air, so it settles and spreads out flat.
@@ -678,6 +846,7 @@ export class Colony {
    * Useful for re-running the same map from a fresh inoculum.
    */
   clearMould(): void {
+    this.revision++
     for (let i = 0; i < this.highWater; i++) if (this.state[i] !== STATE_FREE) this.kill(i)
     this.trail.clear()
     this.vein.clear()
@@ -689,6 +858,7 @@ export class Colony {
 
   /** Wipe the organism out of a sphere, leaving the rest of the colony alone. */
   wipeMould(x: number, y: number, z: number, radius: number): number {
+    this.revision++
     const r2 = radius * radius
     let removed = 0
     for (let i = 0; i < this.highWater; i++) {
@@ -716,7 +886,7 @@ export class Colony {
           if (dx * dx + dy * dy + dz * dz > r2) continue
           const vx = cx + dx
           if (vx < 0 || vx > last) continue
-          const i = vx + n * (vy + n * vz)
+          const i = this.lattice.index(vx, vy, vz)
           this.trail.data[i] = 0
           this.vein.data[i] = 0
           this.bio.data[i] = 0
@@ -731,19 +901,11 @@ export class Colony {
   // -------------------------------------------------------------------------
 
   private voxel(x: number, y: number, z: number): number {
-    const n = this.n
-    const last = n - 1
-    let ix = Math.floor(x)
-    let iy = Math.floor(y)
-    let iz = Math.floor(z)
-    ix = ix < 0 ? 0 : ix > last ? last : ix
-    iy = iy < 0 ? 0 : iy > last ? last : iy
-    iz = iz < 0 ? 0 : iz > last ? last : iz
-    return ix + n * (iy + n * iz)
+    return this.lattice.index(x, y, z)
   }
 
   isSolid(x: number, y: number, z: number): boolean {
-    return this.solidMask[this.voxel(x, y, z)] === 1
+    return this.solidMask.data[this.voxel(x, y, z)] === 1
   }
 
   addSolid(
@@ -758,6 +920,7 @@ export class Colony {
     climbable = true,
     yaw = 0,
   ): SolidInstance | null {
+    this.revision++
     const s = createSolid(kindId, material, x, y, z, scale, rotated, dims, climbable, yaw)
     if (!s) return null
     // Rest it on whatever is underneath. The search starts from the point that
@@ -778,6 +941,7 @@ export class Colony {
   }
 
   removeSolid(id: string): void {
+    this.revision++
     const i = this.solids.findIndex((s) => s.id === id)
     if (i >= 0) {
       this.solids.splice(i, 1)
@@ -826,13 +990,14 @@ export class Colony {
   /** Rasterise the solids into the occupancy mask, grip field and boundary lists. */
   private rebuildSolids(): void {
     const n = this.n
-    this.solidMask.fill(0)
-    this.gripField.fill(0)
-    this.slipField.fill(0)
+    this.solidMask.clear()
+    this.gripField.clear()
+    this.slipField.clear()
     if (this.solids.length === 0) {
       this.obstacles = undefined
       return
     }
+    const L = this.lattice
     const mask = this.solidMask
     const grip = this.gripField
     const slip = this.slipField
@@ -851,7 +1016,7 @@ export class Colony {
         for (let y = y0; y <= y1; y++) {
           for (let x = x0; x <= x1; x++) {
             if (!solidContains(s, x + 0.5, y + 0.5, z + 0.5)) continue
-            mask[x + n * (y + n * z)] = 1
+            mask.data[L.cell(x, y, z)] = 1
             // Stamp grip into the surrounding voxels, so a mote alongside a face
             // has something to hold on to.
             for (let dz = -1; dz <= 1; dz++) {
@@ -863,9 +1028,9 @@ export class Colony {
                 for (let dx = -1; dx <= 1; dx++) {
                   const gx = x + dx
                   if (gx < 0 || gx > last) continue
-                  const gi = gx + n * (gy + n * gz)
-                  if (grip[gi] < adh) grip[gi] = adh
-                  if (!s.climbable) slip[gi] = 1
+                  const gi = L.cell(gx, gy, gz)
+                  if (grip.data[gi] < adh) grip.data[gi] = adh
+                  if (!s.climbable) slip.data[gi] = 1
                 }
               }
             }
@@ -874,30 +1039,58 @@ export class Colony {
       }
     }
 
-    const nn = n * n
+    // Every voxel that can be solid, or next to a solid, lies inside one of the
+    // bounding boxes grown by a voxel - so the boundary lists are built by
+    // walking those rather than the whole lattice, which at a metre would be a
+    // billion voxels of mostly nothing. Overlapping objects can list a voxel
+    // twice; both the stencil fix-up and the solid clamp are assignments, so a
+    // duplicate costs a little work and changes nothing.
     const boundary: number[] = []
+    const boundaryNb: number[] = []
     const solid: number[] = []
-    for (let i = 0; i < mask.length; i++) {
-      if (mask[i]) {
-        solid.push(i)
-        continue
+    const md = mask.data
+    for (const s of this.solids) {
+      const [bx0, by0, bz0, bx1, by1, bz1] = solidBounds(s)
+      const x0 = Math.max(0, Math.floor(bx0) - 1)
+      const y0 = Math.max(0, Math.floor(by0) - 1)
+      const z0 = Math.max(0, Math.floor(bz0) - 1)
+      const x1 = Math.min(last, Math.ceil(bx1) + 1)
+      const y1 = Math.min(last, Math.ceil(by1) + 1)
+      const z1 = Math.min(last, Math.ceil(bz1) + 1)
+      for (let z = z0; z <= z1; z++) {
+        for (let y = y0; y <= y1; y++) {
+          for (let x = x0; x <= x1; x++) {
+            const i = L.index(x, y, z)
+            if (md[i] === 1) {
+              solid.push(i)
+              continue
+            }
+            if (grip.data[i] === 0 && slip.data[i] === 0) continue
+            const xm = x > 0 ? L.index(x - 1, y, z) : i
+            const xp = x < last ? L.index(x + 1, y, z) : i
+            const ym = y > 0 ? L.index(x, y - 1, z) : i
+            const yp = y < last ? L.index(x, y + 1, z) : i
+            const zm = z > 0 ? L.index(x, y, z - 1) : i
+            const zp = z < last ? L.index(x, y, z + 1) : i
+            if (
+              md[xm] !== 1 &&
+              md[xp] !== 1 &&
+              md[ym] !== 1 &&
+              md[yp] !== 1 &&
+              md[zm] !== 1 &&
+              md[zp] !== 1
+            )
+              continue
+            boundary.push(i)
+            boundaryNb.push(xm, xp, ym, yp, zm, zp)
+          }
+        }
       }
-      if (grip[i] === 0 && slip[i] === 0) continue // only voxels beside a solid
-      const x = i % n
-      const y = ((i - x) / n) % n
-      const z = (i - x - y * n) / nn
-      const touching =
-        (x > 0 && mask[i - 1] === 1) ||
-        (x < last && mask[i + 1] === 1) ||
-        (y > 0 && mask[i - n] === 1) ||
-        (y < last && mask[i + n] === 1) ||
-        (z > 0 && mask[i - nn] === 1) ||
-        (z < last && mask[i + nn] === 1)
-      if (touching) boundary.push(i)
     }
     this.obstacles = {
-      mask,
+      mask: mask.data,
       boundary: Int32Array.from(boundary),
+      boundaryNb: Int32Array.from(boundaryNb),
       solid: Int32Array.from(solid),
     }
     // A solid dropped onto existing substrate or slime evicts it.
@@ -922,22 +1115,21 @@ export class Colony {
   /** Surface normal of the obstacle field, pointing away from the solid. */
   private solidNormal(x: number, y: number, z: number, out: number[]): void {
     const n = this.n
-    const nn = n * n
-    const i = this.voxel(x, y, z)
-    const mask = this.solidMask
-    const ix = i % n
-    const iy = ((i - ix) / n) % n
-    const iz = (i - ix - iy * n) / nn
     const last = n - 1
+    const L = this.lattice
+    const mask = this.solidMask.data
+    const ix = Math.min(last, Math.max(0, Math.floor(x)))
+    const iy = Math.min(last, Math.max(0, Math.floor(y)))
+    const iz = Math.min(last, Math.max(0, Math.floor(z)))
     let ax = 0
     let ay = 0
     let az = 0
-    if (ix > 0 && mask[i - 1]) ax += 1
-    if (ix < last && mask[i + 1]) ax -= 1
-    if (iy > 0 && mask[i - n]) ay += 1
-    if (iy < last && mask[i + n]) ay -= 1
-    if (iz > 0 && mask[i - nn]) az += 1
-    if (iz < last && mask[i + nn]) az -= 1
+    if (ix > 0 && mask[L.index(ix - 1, iy, iz)]) ax += 1
+    if (ix < last && mask[L.index(ix + 1, iy, iz)]) ax -= 1
+    if (iy > 0 && mask[L.index(ix, iy - 1, iz)]) ay += 1
+    if (iy < last && mask[L.index(ix, iy + 1, iz)]) ay -= 1
+    if (iz > 0 && mask[L.index(ix, iy, iz - 1)]) az += 1
+    if (iz < last && mask[L.index(ix, iy, iz + 1)]) az -= 1
     const l = Math.hypot(ax, ay, az)
     if (l < 1e-6) {
       out[0] = 0
@@ -1003,6 +1195,7 @@ export class Colony {
   // -------------------------------------------------------------------------
 
   addFood(defId: string, x: number, y: number, z: number, massMg?: number): FoodInstance | null {
+    this.revision++
     const def = FOOD_BY_ID[defId]
     if (!def) return null
     let fx = clamp(x, 1, this.n - 1)
@@ -1020,6 +1213,18 @@ export class Colony {
       fy = clamp(y, 1, this.n - 2)
       fx = clamp(fx, 1, this.n - 1)
     }
+    // A plate can only hold so many deposits before it is clutter rather than an
+    // experiment - and every one of them is a term in the environmental
+    // chemistry, rebuilt every simulated minute. Past the cap the oldest goes,
+    // which over a long drip feed means the ones the colony never came back for.
+    if (this.foods.length >= MAX_DEPOSITS) {
+      let oldest = 0
+      for (let k = 1; k < this.foods.length; k++) {
+        if (this.foods[k].createdAtMin < this.foods[oldest].createdAtMin) oldest = k
+      }
+      this.spentResidueMg += foodResidueMg(this.foods[oldest])
+      this.foods.splice(oldest, 1)
+    }
     const f = createFoodInstance(
       def,
       fx,
@@ -1034,6 +1239,7 @@ export class Colony {
   }
 
   removeFood(id: string): void {
+    this.revision++
     const i = this.foods.findIndex((f) => f.id === id)
     if (i >= 0) {
       this.foods.splice(i, 1)
@@ -1088,14 +1294,23 @@ export class Colony {
    * Drop deposits at random columns, each landing on whatever is highest at that
    * spot - the agar, or the top of a block if something is in the way.
    */
-  scatterFood(defId: string, count: number, massMg?: number): number {
+  scatterFood(
+    defIds: string | string[],
+    count: number,
+    massMg?: number | ((defId: string) => number | undefined),
+    pad = 14,
+  ): number {
+    // A list is drawn from at random, one pick per deposit, so a mixed scatter
+    // can drop a salt crystal beside an oat flake the way a real plate ends up
+    // with whatever happened to land on it.
+    const pool = typeof defIds === 'string' ? [defIds] : defIds
+    if (pool.length === 0) return 0
     let made = 0
     // Food the colony cannot find does not maintain anything, so the scatter is
     // drawn around where it currently is, with enough margin to still draw it
     // outwards. With nothing alive, use the whole plate.
     const alive = this.motes + this.dormantCount > 0
     const r = this.region
-    const pad = 14
     const x0 = alive ? Math.max(3, r.x0 - pad) : 3
     const x1 = alive ? Math.min(this.n - 3, r.x1 + pad) : this.n - 3
     const z0 = alive ? Math.max(3, r.z0 - pad) : 3
@@ -1105,7 +1320,60 @@ export class Colony {
       const z = z0 + Math.random() * (z1 - z0)
       // Search from the ceiling so it finds the highest surface in the column.
       const y = this.surfaceBelow(x, this.n - 2, z) + 1
-      if (this.addFood(defId, x, y, z, massMg)) made++
+      const pick = pool[(Math.random() * pool.length) | 0]
+      const mass = typeof massMg === 'function' ? massMg(pick) : massMg
+      if (this.addFood(pick, x, y, z, mass)) made++
+    }
+    return made
+  }
+
+  /**
+   * Drop deposits in a ring beyond the colony's own edge.
+   *
+   * A scatter inside the footprint feeds the colony where it already is, which
+   * keeps it alive and keeps it still. Putting the food past the edge is what
+   * makes it travel, which is the whole point of a drip feed: the network has to
+   * keep being rebuilt towards wherever the next meal landed.
+   */
+  scatterBeyond(
+    defIds: string | string[],
+    count: number,
+    reach: number,
+    massMg?: number | ((defId: string) => number | undefined),
+  ): number {
+    const pool = typeof defIds === 'string' ? [defIds] : defIds
+    if (pool.length === 0) return 0
+    const r = this.region
+    const alive = this.motes + this.dormantCount > 0
+    if (!alive) return this.scatterFood(pool, count, massMg)
+    const cx = (r.x0 + r.x1) / 2
+    const cz = (r.z0 + r.z1) / 2
+    // The colony's own half-width, so "beyond" means beyond.
+    const edge = Math.max(2, Math.max(r.x1 - r.x0, r.z1 - r.z0) / 2)
+    // One direction for the whole drop, not one per deposit. A ring of food
+    // around the colony pulls it equally every way and it stays where it is;
+    // a patch of food somewhere pulls it somewhere, which is the point.
+    let bearing = Math.random() * Math.PI * 2
+    let px = cx
+    let pz = cz
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const d = edge + Math.random() * Math.max(1, reach)
+      px = cx + Math.cos(bearing) * d
+      pz = cz + Math.sin(bearing) * d
+      if (px > 4 && px < this.n - 4 && pz > 4 && pz < this.n - 4) break
+      bearing = Math.random() * Math.PI * 2
+      px = cx
+      pz = cz
+    }
+    const spread = Math.max(3, reach * 0.3)
+    let made = 0
+    for (let i = 0; i < count; i++) {
+      const x = clamp(px + (Math.random() - 0.5) * spread * 2, 3, this.n - 3)
+      const z = clamp(pz + (Math.random() - 0.5) * spread * 2, 3, this.n - 3)
+      const y = this.surfaceBelow(x, this.n - 2, z) + 1
+      const pick = pool[(Math.random() * pool.length) | 0]
+      const mass = typeof massMg === 'function' ? massMg(pick) : massMg
+      if (this.addFood(pick, x, y, z, mass)) made++
     }
     return made
   }
@@ -1134,11 +1402,21 @@ export class Colony {
       const f = this.foods[k]
       const def = FOOD_BY_ID[f.defId]
       const mass = foodMassMg(f)
-      // A deposit is finished once there is nothing left in it that any enzyme
-      // can touch. What remains is cellulose, chitin, lactose - residue, not
-      // food - so it is cleared off the plate and carried to the ledger rather
-      // than sitting there forever as a crumb that never gets smaller.
-      if (mass <= 1e-4 || this.usableMassMg(f) < 0.04) {
+      // When a deposit is finished with.
+      //
+      // Not when there is nothing edible left in it - that was the old test and
+      // it was wrong, because it is a statement about food rather than about the
+      // deposit. A salt crystal was never edible, so it was deleted the instant
+      // it was placed; a tincture that has given up its trace of sugar is still
+      // 92% of a drop and was deleted with all of it still there.
+      //
+      // So: a deposit goes when there is physically nothing left of it, or when
+      // what remains is residue no enzyme can touch *and* there is little enough
+      // of it to be dispersed rather than sat on. A spent oat flake leaves
+      // crumbs, and crumbs go. A cellulose pad is 92% residue and stays, which
+      // is the whole point of a cellulose pad.
+      const spent = this.usableMassMg(f) < 0.04 && mass < f.initialMassMg * RESIDUE_CLEARS
+      if (mass <= 1e-4 || spent) {
         this.spentResidueMg += foodResidueMg(f)
         this.foods.splice(k, 1)
         this.envDirty = true
@@ -1205,9 +1483,17 @@ export class Colony {
         }
         f.pools.ash = Math.max(0, f.pools.ash * (1 - mineralFrac))
       }
-      // Water and non-nutritive mass go away with the rest of the deposit.
-      if (relFrac > 0) {
-        f.pools.water = Math.max(0, f.pools.water * (1 - relFrac))
+      // Water goes with the rest of the deposit, and also on its own: a drop
+      // left on agar equilibrates with it whether or not anything is eating.
+      // Without this a deposit that is mostly water and nothing else - a plain
+      // agar control, a vinegar drop - would sit on the plate for ever.
+      // Slower than the solute, because the water does not really go anywhere:
+      // a drop merges with the agar rather than evaporating off it, and what is
+      // actually left behind is its solute at a lower concentration. Using the
+      // solute's own rate here makes a vinegar drop vanish in an afternoon.
+      const waterLoss = Math.max(relFrac, leach * access * WATER_DISPERSAL * dt)
+      if (waterLoss > 0) {
+        f.pools.water = Math.max(0, f.pools.water * (1 - waterLoss))
       }
       if (f.pools.inert > 0) {
         f.pools.inert = Math.max(0, f.pools.inert * (1 - leach * access * dt))
@@ -1338,8 +1624,27 @@ export class Colony {
       const tr = this.trait[i]
       const fear = clamp(this.envGrid.repelAt(x, y, z) / FEAR_AT, 0, 1)
       let excite = 0
+      // Cytoplasm carrying this nucleus: what shares its voxel, or what is just
+      // behind it along the way it came. A tip at the leading edge is pushed
+      // from behind - that is how a pseudopod works - so taking only what is
+      // underneath it would cripple the advancing front while doing nothing
+      // about the thing that actually needs stopping, which is a nucleus with
+      // the organism nowhere near it.
+      const behindSupport = this.bio.nearest(
+        x - this.dx[i] * 1.5,
+        y - this.dy[i] * 1.5,
+        z - this.dz[i] * 1.5,
+      )
+      const here2 = this.bio.nearest(x, y, z) - bm
+      const around = here2 > behindSupport ? here2 : behindSupport
+      // An arm that has been failing long enough is taken back rather than left
+      // to wander: the mote turns round and follows the tube uphill, towards
+      // thicker network and so towards wherever the colony is actually feeding.
+      // It also stops holding its own tube open, so the route it came out on is
+      // reabsorbed behind it as it goes.
+      const withdrawing = this.starveMin[i] > WITHDRAW_AFTER_MIN && sat < 0.22
       const here = this.voxel(x, y, z)
-      const gripHere = this.gripField[here] / 255
+      const gripHere = this.gripField.data[here] / 255
       const onFloor = y < 2.2
       // Beside an actual object, as opposed to lying on the plate. The two call
       // for different search behaviour, and conflating them costs one or the
@@ -1386,7 +1691,21 @@ export class Colony {
       let hx = this.dx[i]
       let hy = this.dy[i]
       let hz = this.dz[i]
-      const senses = stride === 1 || i % stride === phase
+      // Settled nuclei.
+      //
+      // A nucleus sitting in the middle of a deposit it is full from, packed in
+      // with the rest of the body, has nothing to decide. Running the sensor
+      // cone for it costs several field samples a step to produce a jitter that
+      // reads as orbiting rather than as feeding - expensive, and worse to look
+      // at than simply sitting there. So it stops steering until something
+      // changes, and looks up every so often in case something has.
+      const settled =
+        sat > SETTLED_SATIETY &&
+        around > CROWDING_LIMIT * 0.6 &&
+        this.carb.nearest(x, y, z) + this.prot.nearest(x, y, z) > SETTLED_FOOD
+      const senses =
+        (stride === 1 || i % stride === phase) &&
+        (!settled || (this.stepCount + i) % SETTLED_RECHECK === 0)
       if (senses) {
 
       // Orthonormal basis perpendicular to the heading.
@@ -1446,12 +1765,15 @@ export class Colony {
       // with the hungry part. That is the shape of the real thing: a dense mass
       // that stays dense, with an exploratory fringe reaching out of it. Inverting
       // this gives a cloud of independent foragers that never coalesces.
-      const cohesion = P.cohesion * (0.3 + 0.95 * sat)
-      const novelty = beside
-        ? 1.6 * (1 - sat)
-        : sat < 0.32
-          ? 1.5 * (0.32 - sat)
-          : 0
+      const retract = withdrawing ? RETRACT_WEIGHT : 0
+      const cohesion = P.cohesion * (0.3 + 0.95 * sat) * (withdrawing ? 2.2 : 1)
+      const novelty = withdrawing
+        ? 0
+        : beside
+          ? 1.6 * (1 - sat)
+          : sat < 0.32
+            ? 1.5 * (0.32 - sat)
+            : 0
       // A fed mote looks where it is going. A starving one looks everywhere,
       // including backwards, which is how an unproductive branch finds its own
       // trail again and retracts along it towards the rest of the colony.
@@ -1494,9 +1816,16 @@ export class Colony {
         const c = this.carb.nearest(qx, qy, qz)
         const p = this.prot.nearest(qx, qy, qz)
         const tr = this.trail.nearest(qx, qy, qz)
+        // Volatiles. Smelt far beyond anything the deposit has actually put into
+        // solution, which is what lets the colony set off towards something it
+        // has no other way of knowing is there - and what lets a lure work.
+        const vol = this.envGrid.lureAt(qx, qy, qz)
         // Thigmotaxis: a wettable surface is worth following, which is how the
         // front gets up the side of things instead of only around them.
-        const surf = surfaceSeek === 0 ? 0 : surfaceSeek * (this.gripField[this.voxel(qx, qy, qz)] / 255)
+        const surf =
+          surfaceSeek === 0
+            ? 0
+            : surfaceSeek * (this.gripField.data[this.voxel(qx, qy, qz)] / 255)
         // Cohesion: stay part of the organism. This is what makes the colony a
         // single mass that bulges towards food, rather than a spray of
         // independent branches wandering off in all directions.
@@ -1505,15 +1834,22 @@ export class Colony {
         // hungry front prefers ground it has not already worked over. This is
         // what carries the front up and around an object instead of leaving it
         // circling the base of it.
-        const stale = novelty === 0 ? 0 : novelty * michaelis(this.vein.nearest(qx, qy, qz), 25)
+        const vn = novelty === 0 && retract === 0 ? 0 : this.vein.nearest(qx, qy, qz)
+        const stale = novelty === 0 ? 0 : novelty * michaelis(vn, 25)
+        // The way home. Thicker tube means closer to the working part of the
+        // network, so climbing that gradient is how an arm gets reabsorbed into
+        // the body instead of simply starving where it stands.
+        const home = retract === 0 ? 0 : retract * michaelis(vn, RETRACT_KM)
         // Square-root compression: concentrations span several orders of
         // magnitude, and argmax over raw values would let one term swamp the rest.
         let score =
           surf +
-          body -
+          body +
+          home -
           stale +
           P.trailAffinity * TRAIL_WEIGHT * michaelis(tr, TRAIL_KM) +
-          P.nutrientAffinity * (appC * Math.sqrt(c) + appP * Math.sqrt(p)) -
+          P.nutrientAffinity * (appC * Math.sqrt(c) + appP * Math.sqrt(p)) +
+          P.nutrientAffinity * LURE_SCALE * vol -
           aversion * REPEL_SCALE * this.envGrid.repelAt(qx, qy, qz) -
           LIGHT_SCALE * lightBias * sy
         // Search commitment: a hungry front pushes on rather than dithering.
@@ -1522,7 +1858,7 @@ export class Colony {
         if (qx < lo || qx > hi || qy < lo || qy > hi || qz < lo || qz > hi) score -= 8
         if (score > bestScore) {
           bestScore = score
-          bestNutrient = appC * c + appP * p
+          bestNutrient = appC * c + appP * p + LURE_EXCITE * vol
           bsx = sx
           bsy = sy
           bsz = sz
@@ -1578,7 +1914,7 @@ export class Colony {
       // and it only falls when it reaches out further than the tube can carry.
       const trailBehind = this.trail.nearest(x - hx * 1.2, y - hy * 1.2, z - hz * 1.2)
       const support = trailHere > trailBehind * 0.8 ? trailHere : trailBehind * 0.8
-      const sheer = this.slipField[here] === 1
+      const sheer = this.slipField.data[here] === 1
       const grip = onFloor ? 1 : gripHere
       const hold = grip * GRIP_STRENGTH + SLIME_HOLD * michaelis(support, HOLD_KM)
       const weight = gravity * (0.55 + 0.45 * (bm / BIO.kinetics.referenceBiomassUg))
@@ -1615,8 +1951,25 @@ export class Colony {
         // eagerness only applies while there is still an appetite behind it,
         // otherwise a fed mote accelerates straight off the food it just found.
         (1 + 0.8 * excite * (1 - sat) + 1.3 * fear) *
+        // Narcotics do not poison the plasmodium, they detune the calcium
+        // oscillator that drives the contraction. Streaming slows, and the mote
+        // is left sitting in the stuff it would rather be walking out of.
+        1 /
+          (1 +
+            NARCOSIS_SCALE * this.envGrid.narcoticAt(x, y, z)) *
         (cold ? 0.02 : Math.max(0.15, tempF))
-      const stepLen = P.speed * motility * dt * 4
+      // How much of the organism is here to carry this nucleus forward. The
+      // front therefore advances at the speed of the mass, and the mass arrives
+      // before the feeding does.
+      const carried = michaelis(around, SUPPORT_KM)
+      const stepLen =
+        P.speed *
+        motility *
+        dt *
+        4 *
+        (UNSUPPORTED_SPEED + (1 - UNSUPPORTED_SPEED) * carried) *
+        // A nucleus that is feeding stays where the food is.
+        (settled ? SETTLED_DRIFT : 1)
       let nx = x + hx * stepLen
       let ny = y + hy * stepLen
       let nz = z + hz * stepLen
@@ -1628,7 +1981,7 @@ export class Colony {
           ny += this.vy[i] * dt
           // The tube behind a falling mote is being pulled apart.
           if (this.vy[i] < -0.5) {
-            const ti = this.trail.index(x, y, z)
+            const ti = this.trail.cell(x, y, z)
             const before = this.trail.data[ti]
             this.trail.data[ti] = before * (1 - Math.min(0.9, TEAR_RATE * dt))
             if (before > HOLD_KM && this.vy[i] < -2) tears++
@@ -1709,18 +2062,68 @@ export class Colony {
       // Tube thickening. Flux is the cytoplasm this mote is actually carrying, so
       // a route that keeps delivering food keeps its tube and the rest fade.
       {
-        const vi = this.vein.index(nx, ny, nz)
-        const have = this.vein.data[vi]
-        // Laying tube is construction, and construction is paid for out of the
-        // stores. A mote with nothing in it leaves barely a mark, so a starving
-        // colony searching across bare agar does not slowly paint over the whole
-        // plate - only routes that carried something stay visible.
-        // Tube is built by the organism, not by a stray nucleus: an unreached
-        // deposit stays dark until the body gets there.
-        const attached = this.bio.nearest(nx, ny, nz) - bm > CONNECTION_FLOOR
-        const flux = bm * Math.max(0, sat - 0.12) * 1.3 * (1 - 0.8 * fear) * (attached ? 1 : 0.12)
-        this.vein.data[vi] =
-          have + VEIN_GAIN * michaelis(flux, VEIN_FLUX_KM) * (1 - have / VEIN_MAX) * dt
+        const vi = this.vein.cell(nx, ny, nz)
+        let have = this.vein.data[vi]
+        // Is this nucleus still part of the organism? Either it is standing in
+        // the body itself, or it came off the end of a tube that leads back to
+        // it. Nothing else counts: a plasmodium is one cell, and a nucleus that
+        // has lost the cytoplasm is not a colony in its own right.
+        const behind = this.vein.nearest(x, y, z)
+        const inBody = this.bio.nearest(nx, ny, nz) - bm > CONNECTION_FLOOR
+        const joined = inBody || behind > TUBE_CONTACT
+        if (joined) {
+          // An advancing pseudopod drags a tube behind it, because the cytoplasm
+          // streaming out to the tip has to flow through something. The organism
+          // pays for that out of the body, not out of whatever the tip has
+          // managed to eat - which is the whole reason a front crossing bare
+          // agar leaves a continuous, visible thread back to where it came from
+          // instead of turning up at the far food out of nowhere.
+          // Only a strand, never more: thickness has to be earned by carrying
+          // something. Letting the strand inherit the thickness behind it looks
+          // right for a few hours and then spreads the trunk over the whole
+          // plate, which is the opposite of a network.
+          //
+          // And a mote on its way home holds nothing open. That is what makes a
+          // failed arm visibly disappear: the mass leaves, and the tube it was
+          // in is no longer being maintained, so it is reabsorbed behind it.
+          if (!withdrawing && have < TUBE_STRAND) {
+            // The strand itself is not charged for. It is the membrane closing
+            // around cytoplasm that has already gone there, not new structure,
+            // and making a starving scout pay for it simply stops the organism
+            // being able to explore at all.
+            have += (TUBE_STRAND - have) * Math.min(1, TUBE_ADVANCE * dt)
+            this.vein.data[vi] = have
+            this.vein.touch(vi, have)
+          }
+        }
+        // Thickening on top of that. Flux is the cytoplasm this mote is actually
+        // carrying, so a route that keeps delivering food keeps a fat tube and
+        // the rest stay threads. A stray nucleus thickens nothing.
+        if (joined) {
+          // Occupancy is worth a little - a deposit being fed on is genuinely
+          // part of the network - but what actually builds a tube is the
+          // cytoplasm going through it, which is the streaming this mote did.
+          // Traffic only maintains a tube that is already there: a mote walking
+          // over bare agar is not flow through anything.
+          const transit =
+            have > TUBE_CONTACT ? (TRANSIT_GAIN * bm * stepLen) / TRANSIT_REF : 0
+          const flux =
+            (OCCUPANCY_GAIN * bm * Math.max(0, sat - 0.12) +
+              (STREAM_GAIN * this.streamed[i]) / Math.max(dt, 1e-6) +
+              transit) *
+            (1 - 0.8 * fear)
+          // Hill kinetics rather than plain saturation. With a first-order
+          // response every part of a broad front saturates at much the same
+          // thickness and the network comes out as rivers; squaring it separates
+          // the voxels that are genuinely carrying the traffic from the ones
+          // merely next to them, which is what makes a vein a cord.
+          const f2 = flux * flux
+          const grown =
+            have +
+            VEIN_GAIN * (f2 / (f2 + VEIN_FLUX_KM * VEIN_FLUX_KM)) * (1 - have / VEIN_MAX) * dt
+          this.vein.data[vi] = grown
+          this.vein.touch(vi, grown)
+        }
       }
 
       // ------------------------------------------------------------------
@@ -1760,7 +2163,17 @@ export class Colony {
       // connection is on its own. That is the whole of the organism's logistics,
       // and it is why it can put its mass where the food is.
       // ------------------------------------------------------------------
-      const conductance = michaelis(this.vein.nearest(nx, ny, nz), CONDUCTANCE_KM)
+      // Same oscillator, same consequence: cytoplasm is pumped by the
+      // contraction, so a narcotised stretch of network stops delivering.
+      // Flow through a tube rises with its bore, so a thin exploratory strand
+      // carries far less than an established vein. Measured, a steeper law than
+      // this starves the network before it can build itself: thickening is
+      // driven by streaming, so if nothing streams, nothing thickens, and the
+      // colony never gets a transport system at all.
+      const conductance =
+        michaelis(this.vein.nearest(nx, ny, nz), CONDUCTANCE_KM) /
+        (1 + NARCOSIS_SCALE * this.envGrid.narcoticAt(nx, ny, nz))
+      let streamed = 0
       if (conductance > 0.02 && P.circulation > 0) {
         const rate = Math.min(0.9, P.circulation * conductance * dt * 4)
         const wantC = CIRCULATION_TARGET * capC
@@ -1768,22 +2181,27 @@ export class Colony {
           const give = (cs - wantC) * rate
           cs -= give
           this.circulatingCarb += give
+          streamed += give
         } else {
           const take = Math.min((wantC - cs) * rate, this.circulatingCarb)
           cs += take
           this.circulatingCarb -= take
+          streamed += take
         }
         const wantP = CIRCULATION_TARGET * capP
         if (ps > wantP) {
           const give = (ps - wantP) * rate
           ps -= give
           this.circulatingProtein += give
+          streamed += give
         } else {
           const take = Math.min((wantP - ps) * rate, this.circulatingProtein)
           ps += take
           this.circulatingProtein -= take
+          streamed += take
         }
       }
+      this.streamed[i] = streamed
 
       // ------------------------------------------------------------------
       // Maintenance respiration, then growth.
@@ -1880,9 +2298,9 @@ export class Colony {
       // Thickening where the body is already thick achieves nothing; the colony
       // puts new mass at its margins and on its food. And it only divides where
       // it is actually part of the organism.
-      const around = this.bio.nearest(nx, ny, nz) - bm
-      const crowded = around > CROWDING_LIMIT
-      const connected = around > CONNECTION_FLOOR
+      const neighbours = this.bio.nearest(nx, ny, nz) - bm
+      const crowded = neighbours > CROWDING_LIMIT
+      const connected = neighbours > CONNECTION_FLOOR
       if (bm > BIO.life.divideBiomassUg && !crowded && connected) {
         const j = this.spawn()
         if (j >= 0) {
@@ -1953,27 +2371,45 @@ export class Colony {
     this.pendingDiffusionMin += dt
     // Tubes are structure, not a solute: they do not diffuse, they are just
     // reabsorbed when no cytoplasm is flowing through them.
-    if (P.veinDecayPerMin > 0) {
-      const keep = Math.exp(-P.veinDecayPerMin * dt)
+    this.pendingVeinMin += dt
+    if (P.veinDecayPerMin > 0 && this.stepCount % VEIN_DECAY_EVERY === VEIN_DECAY_EVERY - 1) {
+      const keep = Math.exp(-P.veinDecayPerMin * this.pendingVeinMin)
+      this.pendingVeinMin = 0
       const vd = this.vein.data
-      const nn2 = n * n
-      for (let z = region.z0; z <= region.z1; z++) {
-        for (let y = region.y0; y <= region.y1; y++) {
-          const row = z * nn2 + y * n
-          for (let x = region.x0; x <= region.x1; x++) vd[row + x] *= keep
+      const cells = BRICK ** 3
+      const maxes = this.vein.brickMax
+      this.lattice.forEachBrickIn(region, (slot) => {
+        // Nothing to reabsorb in a brick with no tube in it.
+        if (maxes[slot] < FIELD_EPS) return
+        const base = slot * cells
+        let max = 0
+        for (let k = 0; k < cells; k++) {
+          const v = (vd[base + k] *= keep)
+          if (v > max) max = v
         }
-      }
+        maxes[slot] = max < FIELD_EPS ? 0 : max
+      })
     }
     const obstacles = this.obstacles
     // The slime trail is what the swarm steers by, and the fine structure of the
     // network lives in it, so it is integrated every step. The nutrient plumes
     // are smooth and slow, and run on the coarse cadence.
-    this.trail.step(
-      clamp(P.trailDiffusion * stepScale, 0, 1),
-      1 - Math.exp(-P.trailDecayPerMin * dt),
-      region,
-      obstacles,
-    )
+    // The slime trail is what the swarm steers by, so it was integrated every
+    // step. It does not need to be: diffusion is linear, so two steps' worth
+    // applied at once transports the same material, and the trail changes over
+    // minutes while the swarm is sampling it every quarter-minute. Measured, the
+    // colony cannot tell the difference and it is half the work.
+    this.pendingTrailMin += dt
+    if (this.stepCount % TRAIL_EVERY === TRAIL_EVERY - 1) {
+      const acc = this.pendingTrailMin
+      this.pendingTrailMin = 0
+      this.trail.step(
+        clamp(P.trailDiffusion * (acc / FIXED_STEP_MIN), 0, 1),
+        1 - Math.exp(-P.trailDecayPerMin * acc),
+        region,
+        obstacles,
+      )
+    }
     if (this.stepCount % DIFFUSE_EVERY === DIFFUSE_EVERY - 1) {
       const acc = this.pendingDiffusionMin
       this.pendingDiffusionMin = 0
@@ -1995,7 +2431,40 @@ export class Colony {
       this.compactAt = this.stepCount
       this.compact()
     }
+    if (this.stepCount % RECLAIM_EVERY === 0) this.reclaimBricks()
   }
+
+  /**
+   * Hand back the ground the colony has finished with.
+   *
+   * A brick that holds no substrate, no slime, no tube, no biomass and no
+   * structure has nothing in it to integrate or to draw, so it goes back on the
+   * free list and the next brick the organism reaches into reuses the memory.
+   * Without this, a colony that crosses a large vessel keeps paying for
+   * everywhere it has ever been.
+   */
+  private reclaimBricks(): void {
+    const floats = [this.carb, this.prot, this.trail, this.vein, this.bio]
+    const bytes = [this.solidMask, this.gripField, this.slipField]
+    const doomed: number[] = []
+    this.lattice.forEachBrick((slot) => {
+      for (const f of floats) if (f.rescanBrick(slot) >= FIELD_EPS) return
+      for (const b of bytes) if (b.anyNonZero(slot)) return
+      doomed.push(slot)
+    })
+    for (const slot of doomed) this.lattice.release(slot)
+    if (doomed.length > 0) this.reclaimed += doomed.length
+  }
+
+  /** Bricks handed back over the colony's life, for the read-out. */
+  reclaimed = 0
+  /**
+   * Bumped whenever the contents of the vessel change - an object placed or
+   * removed, a deposit added, the swarm seeded or wiped. The autosave watches
+   * it, because building a map is something people do with the clock stopped
+   * and a save that only runs while the clock is going would never see it.
+   */
+  revision = 0
 
   private kinetics(tempF: number) {
     return {

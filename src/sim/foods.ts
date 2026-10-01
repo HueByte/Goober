@@ -99,6 +99,7 @@ export const FOODS: FoodDef[] = [
     shape: 'flake',
     defaultMassMg: 250,
     radius: 2.4,
+    volatiles: 60,
     toxins: [],
     notes: [
       'What Physarum is actually fed in almost every laboratory and classroom.',
@@ -567,6 +568,7 @@ export const FOODS: FoodDef[] = [
         mgPer100g: 92000,
         potency: 0.012,
         repellency: 1.0,
+        narcosis: 0.3,
         note: 'Alkaloid; blocks ion channels and disrupts the contraction rhythm.',
       },
     ],
@@ -598,6 +600,7 @@ export const FOODS: FoodDef[] = [
         mgPer100g: 40,
         potency: 0.05,
         repellency: 0.3,
+        narcosis: 0.75,
         note: 'Interferes with calcium handling, and so with the contraction rhythm that moves cytoplasm.',
       },
     ],
@@ -606,6 +609,347 @@ export const FOODS: FoodDef[] = [
       'Physarum moves by rhythmic contraction on a roughly 100-second calcium cycle; caffeine detunes it.',
       'Nutritionally almost water, so this is a behavioural perturbation rather than a food.',
       'pH 5.0 is in the comfortable band, which is why the effect reads as caffeine rather than acid.',
+    ],
+  },
+  {
+    id: 'fish-flake',
+    name: 'Tropical fish flake',
+    glyph: 'fish',
+    category: 'classic',
+    color: '#c8703f',
+    blurb: 'Fish meal, cereal binder and a full vitamin premix. Nearly a complete diet.',
+    comp: comp({
+      water: 7.0,
+      sugars: 2.0,
+      starch: 20.0,
+      fiber: 2.0,
+      protein: 47.0,
+      freeAminoAcids: 1.5,
+      lipid: 7.5,
+      chitin: 1.5,
+      nucleicAcids: 1.5,
+      ash: 10.0,
+    }),
+    traces: {
+      K: 900,
+      P: 1400,
+      Mg: 180,
+      Ca: 2300,
+      Fe: 25,
+      Zn: 12,
+      Na: 600,
+      thiamine: 2.5,
+      heme: 1.2,
+    },
+    ph: 6.3,
+    sugarProfile: 'mixed',
+    matrix: 'flake',
+    shape: 'flake',
+    defaultMassMg: 120,
+    radius: 2.0,
+    volatiles: 180,
+    toxins: [],
+    notes: [
+      'The other food hobbyists actually keep Physarum on, and the only one on this menu that supplies everything at once.',
+      'Fish meal carries haem iron and the vitamin premix carries thiamine, so neither cofactor runs the colony into a wall.',
+      'Protein-biased rather than at the 2:1 optimum: what limits growth here is carbon, not nitrogen.',
+      'The shrimp-meal fraction brings chitin, which is residue - a flake never quite finishes.',
+    ],
+  },
+  {
+    id: 'egg-white',
+    name: 'Boiled egg white',
+    glyph: 'alb',
+    category: 'protein',
+    color: '#f2efe6',
+    blurb: 'Nitrogen with no carbon behind it, at pH 9. Liebig in one deposit.',
+    comp: comp({ water: 87.6, sugars: 0.7, protein: 10.9, lipid: 0.2, ash: 0.6 }),
+    traces: { K: 163, Na: 166, P: 15, Mg: 11, Ca: 7, thiamine: 0.004 },
+    ph: 9.0,
+    sugarProfile: 'glucose',
+    matrix: 'solid',
+    shape: 'chunk',
+    defaultMassMg: 320,
+    radius: 2.4,
+    toxins: [],
+    notes: [
+      'Ovalbumin is an excellent protease substrate, so the nitrogen comes out readily.',
+      'There is essentially no carbohydrate, so every gram of new structure has to be built by burning amino acids - at 55% efficiency, with the carbon skeletons largely wasted.',
+      'Cooked white sits at pH 9.0, well outside the comfortable band, so growth is slow even where the food itself is good.',
+      'Place it beside a sugar source and the colony will shuttle between the two rather than settle on either.',
+    ],
+  },
+  {
+    id: 'mushroom-cap',
+    name: 'Mushroom cap',
+    glyph: 'fun',
+    category: 'complex',
+    color: '#d6cbb4',
+    blurb: 'Another decomposer, built out of chitin. Mostly unopenable.',
+    comp: comp({
+      water: 92.4,
+      sugars: 0.5,
+      fiber: 1.0,
+      protein: 3.1,
+      freeAminoAcids: 0.4,
+      lipid: 0.3,
+      chitin: 0.8,
+      nucleicAcids: 0.6,
+      ash: 0.9,
+    }),
+    traces: { K: 318, P: 86, Mg: 9, Ca: 3, Fe: 0.5, Zn: 0.5, Na: 5, thiamine: 0.081 },
+    ph: 6.2,
+    sugarProfile: 'mixed',
+    matrix: 'solid',
+    shape: 'chunk',
+    defaultMassMg: 420,
+    radius: 2.8,
+    volatiles: 240,
+    toxins: [],
+    notes: [
+      'A fungal cell wall is chitin and beta-glucan, and chitinase capability is 0.12 - enough to work on it, nowhere near enough to live on it.',
+      'What is actually taken is the cytoplasm inside: the free amino acids, the nucleic acids and the little soluble sugar.',
+      'Over 90% water, so the deposit shrinks quickly and yields very little for its size.',
+      'A good demonstration that two decomposers on the same log are not eating the same thing.',
+    ],
+  },
+  {
+    id: 'lentil-flour',
+    name: 'Lentil flour',
+    glyph: 'len',
+    category: 'protein',
+    color: '#b0824f',
+    blurb: 'Plant protein and starch together, in a powder that wets immediately.',
+    comp: comp({
+      water: 10.4,
+      sugars: 2.0,
+      starch: 48.0,
+      fiber: 10.7,
+      protein: 24.6,
+      freeAminoAcids: 0.5,
+      lipid: 1.1,
+      ash: 2.7,
+    }),
+    traces: { K: 955, P: 281, Mg: 47, Ca: 35, Fe: 6.5, Zn: 3.3, Na: 6, thiamine: 0.87 },
+    ph: 6.5,
+    sugarProfile: 'mixed',
+    matrix: 'powder',
+    shape: 'powder',
+    defaultMassMg: 200,
+    radius: 2.2,
+    toxins: [],
+    notes: [
+      'What an oat flake is missing: twice the protein, and the starch to burn alongside it.',
+      'Ground, so the matrix barrier an oat flake puts up is already gone and release starts at once.',
+      'No haematin at all, so a colony kept on this alone still stalls eventually.',
+      'The 10.7% fibre is cellulose and pectin, and stays on the plate as residue.',
+    ],
+  },
+  {
+    id: 'malt-extract',
+    name: 'Malt extract',
+    glyph: 'mlt',
+    category: 'carbohydrate',
+    color: '#8a5a21',
+    blurb: 'Maltose syrup. Amylase opens it instantly; the osmolarity is the catch.',
+    comp: comp({
+      water: 20.0,
+      sugars: 72.0,
+      protein: 4.6,
+      freeAminoAcids: 0.6,
+      ash: 1.8,
+      inert: 1.0,
+    }),
+    traces: { K: 600, P: 180, Mg: 60, Ca: 50, Fe: 1.5, Zn: 0.6, Na: 70, thiamine: 0.1 },
+    ph: 5.2,
+    sugarProfile: 'maltose',
+    matrix: 'liquid',
+    shape: 'drop',
+    defaultMassMg: 220,
+    radius: 2.2,
+    volatiles: 420,
+    toxins: [],
+    notes: [
+      'Maltose is two glucoses in an alpha-1,4 bond - the same bond as starch, and amylase capability is 0.95.',
+      'The classic mycological medium: malt extract agar is what most fungi are grown on.',
+      'Only a fifth of the mass is water, so the syrup is near saturation and pulls water out of whatever touches it.',
+      'pH 5.2 is almost exactly where Physarum wants to be, which is the rest of why it works so well.',
+    ],
+  },
+  {
+    id: 'blank-agar',
+    name: 'Plain 1.5% agar',
+    glyph: 'nil',
+    category: 'stimulus',
+    color: '#aebdc4',
+    blurb: 'The control. Something is there; none of it is food.',
+    comp: comp({ water: 98.4, fiber: 1.5, ash: 0.1 }),
+    traces: { Ca: 10, K: 5, Na: 15, Mg: 2 },
+    ph: 7.0,
+    sugarProfile: 'glucose',
+    matrix: 'gel',
+    shape: 'gel',
+    defaultMassMg: 400,
+    radius: 2.6,
+    toxins: [],
+    notes: [
+      'Agarose is a galactan, with beta-1,4 and alpha-1,3 bonds. No enzyme here touches either.',
+      'Place it opposite a real deposit and the colony will ignore it entirely, which is the point of it.',
+      'This is what any apparent response should be checked against: it is what "no stimulus" looks like.',
+      'Very nearly all water, so it will shrink away and vanish without ever having fed anything.',
+    ],
+  },
+  {
+    id: 'valerian-drop',
+    name: 'Valerian tincture',
+    glyph: 'val',
+    category: 'stimulus',
+    color: '#9aa86b',
+    blurb: 'Smells like a meal from across the vessel. Is not a meal.',
+    comp: comp({ water: 92.0, sugars: 1.2, freeAminoAcids: 0.3, ash: 0.6, inert: 5.9 }),
+    traces: { K: 60, Mg: 5, Ca: 8 },
+    ph: 5.3,
+    sugarProfile: 'mixed',
+    matrix: 'liquid',
+    shape: 'drop',
+    defaultMassMg: 150,
+    radius: 2.0,
+    volatiles: 2600,
+    toxins: [],
+    notes: [
+      'Valerian root is loaded with isovaleric and valerenic acid, both volatile and both powerfully attractive to Physarum.',
+      'The attraction is to the vapour, which carries far beyond anything the drop has put into solution.',
+      'Nutritionally it is about a thousandth of an oat flake. The colony arrives, finds nothing, and has to decide what to do about it.',
+      'Put one across the plate from a real deposit to watch what happens when the organism\'s nose and its stomach disagree.',
+    ],
+  },
+  {
+    id: 'copper-sulfate',
+    name: 'Copper sulfate crystal',
+    glyph: 'CuSO4',
+    category: 'antagonist',
+    color: '#4f9fd6',
+    blurb: 'Only mildly repellent, thoroughly lethal. It gets walked into.',
+    comp: comp({ water: 36.0, ash: 64.0 }),
+    traces: { Na: 1 },
+    ph: 4.0,
+    sugarProfile: 'glucose',
+    matrix: 'crystal',
+    shape: 'crystal',
+    defaultMassMg: 50,
+    radius: 1.2,
+    toxins: [
+      {
+        name: 'copper(II)',
+        mgPer100g: 25400,
+        potency: 0.02,
+        repellency: 0.55,
+        note: 'Binds thiol groups indiscriminately, so enzymes stop working rather than slow down.',
+      },
+    ],
+    notes: [
+      'The pentahydrate is 36% water of crystallisation, which is why it dissolves into the agar so readily.',
+      'Quinine is avoided at four times the distance at which it does harm. Copper is not: the warning and the damage arrive together.',
+      'Strongly acidifying as well - the solution sits near pH 4, below the tolerated band on its own.',
+      'The usual way to kill off one arm of a network and watch the rest re-route around it.',
+    ],
+  },
+  {
+    id: 'vinegar-drop',
+    name: 'Vinegar drop',
+    glyph: 'HAc',
+    category: 'antagonist',
+    color: '#d9cf9a',
+    blurb: 'pH 2.4. Nothing in it is especially poisonous; the acid alone is enough.',
+    comp: comp({ water: 94.8, sugars: 0.1, ash: 0.2, inert: 4.9 }),
+    traces: { K: 73, Na: 5, Mg: 1, Ca: 7 },
+    ph: 2.4,
+    sugarProfile: 'glucose',
+    matrix: 'liquid',
+    shape: 'drop',
+    defaultMassMg: 250,
+    radius: 2.2,
+    volatiles: 900,
+    toxins: [
+      {
+        name: 'acetic acid',
+        mgPer100g: 5000,
+        potency: 0.004,
+        repellency: 0.45,
+        note: 'Undissociated acetic acid crosses the membrane freely and acidifies the cytoplasm from the inside.',
+      },
+    ],
+    notes: [
+      'Physarum works between roughly pH 4.5 and 7. Two units below that, nothing functions at all.',
+      'The harm is almost entirely the proton gradient: by mass the acid is barely cytotoxic.',
+      'Acetic acid is volatile, so the plume reaches further than the drop - and then fades as it evaporates.',
+      'A barrier with a shelf life. Leave it long enough and the colony walks over where it used to be.',
+    ],
+  },
+  {
+    id: 'glycerol-drop',
+    name: 'Glycerol drop',
+    glyph: 'gly',
+    category: 'antagonist',
+    color: '#cfd8e6',
+    blurb: 'Harmless, inedible and desiccating. Induces encystment rather than death.',
+    comp: comp({ water: 30.0, ash: 0.2, inert: 69.8 }),
+    inertMolarMass: 92,
+    traces: { Na: 2 },
+    ph: 6.5,
+    sugarProfile: 'glucose',
+    matrix: 'liquid',
+    shape: 'drop',
+    defaultMassMg: 250,
+    radius: 2.2,
+    toxins: [],
+    notes: [
+      'Not toxic, not acidic, not bitter, and not food either. The only thing glycerol does here is hold on to water.',
+      'A non-electrolyte, so unlike salt it contributes one osmotic particle per molecule rather than two - and there are a very great many molecules.',
+      'The response is the real one to drying: the plasmodium withdraws, thickens and encysts as a sclerotium rather than dying.',
+      'The difference from a salt crystal is that this is recoverable. Wet the area again and the dormant mass wakes up.',
+    ],
+  },
+  {
+    id: 'garlic-paste',
+    name: 'Garlic paste',
+    glyph: 'all',
+    category: 'antagonist',
+    color: '#e3dcc0',
+    blurb: 'Nutritious on paper. Allicin stops the streaming before any of it is eaten.',
+    comp: comp({
+      water: 58.6,
+      sugars: 1.0,
+      fiber: 30.3,
+      protein: 6.4,
+      freeAminoAcids: 0.6,
+      lipid: 0.5,
+      ash: 1.5,
+      inert: 1.1,
+    }),
+    traces: { K: 401, P: 153, Mg: 25, Ca: 181, Fe: 1.7, Zn: 1.2, Na: 17, thiamine: 0.2 },
+    ph: 5.8,
+    sugarProfile: 'mixed',
+    matrix: 'powder',
+    shape: 'powder',
+    defaultMassMg: 200,
+    radius: 2.2,
+    volatiles: 700,
+    toxins: [
+      {
+        name: 'allicin',
+        mgPer100g: 400,
+        potency: 0.03,
+        repellency: 0.5,
+        narcosis: 0.5,
+        note: 'A thiosulfinate: reacts with thiols, and detunes the calcium handling that drives contraction.',
+      },
+    ],
+    notes: [
+      'Garlic carbohydrate is almost all inulin, a fructan with beta-2,1 bonds, and there is no inulinase here - so it reads as fibre.',
+      'Which means 30% of the deposit is residue, and what is left is a modest protein source wrapped around a defence compound.',
+      'Allicin only forms when the clove is crushed. A whole one is inert; a paste is not.',
+      'The visible effect is the streaming slowing to a crawl near the deposit rather than the colony dying on it.',
     ],
   },
 ]
@@ -646,6 +990,10 @@ export interface FoodAnalysis {
   residue: number
   breakdown: MacroBreakdown[]
   toxinLoad: number
+  /** Summed suppression of the streaming rhythm, 0..1-ish. */
+  narcoticLoad: number
+  /** Volatile attractant, mg per 100 g. */
+  volatiles: number
   tags: string[]
   cofactors: { thiamine: number; heme: number }
 }
@@ -683,6 +1031,12 @@ export function osmolarityOf(def: FoodDef): { value: number; anhydrous: boolean;
   // Polymers are one particle per chain: osmotically negligible.
   mmol += (c.starch / 50000) * 1000
   mmol += (c.protein / 25000) * 1000
+  // A dissolved non-electrolyte in the inert fraction - glycerol, say - carries
+  // no charge, yields no energy and cannot be digested, and is still one
+  // osmotically active particle per molecule. That is the whole of its effect.
+  if (def.inertMolarMass && c.inert > 0) {
+    mmol += (c.inert / def.inertMolarMass) * 1000
+  }
   // Salts dissociate. Count each listed cation plus its counter-ion. Phosphorus
   // is skipped because phosphate is generally that counter-ion already.
   for (const [id, mg] of Object.entries(def.traces) as [TraceId, number][]) {
@@ -763,6 +1117,8 @@ export function analyse(def: FoodDef): FoodAnalysis {
   const cnRatio = nitrogen > 1e-9 ? carbon / nitrogen : Infinity
   const { value: osmolarity, anhydrous } = osmolarityOf(def)
   const toxinLoad = def.toxins.reduce((s, t) => s + (t.mgPer100g / 1000) * t.potency, 0)
+  const narcoticLoad = def.toxins.reduce((s, t) => s + (t.narcosis ?? 0), 0)
+  const volatiles = def.volatiles ?? 0
 
   const tags: string[] = []
   if (total < 0.5) tags.push('non-nutritive')
@@ -781,6 +1137,9 @@ export function analyse(def: FoodDef): FoodAnalysis {
   if ((def.traces.thiamine ?? 0) > 0.2) tags.push('supplies thiamine')
   if (residue > 8) tags.push('leaves residue')
   if (access < 0.5) tags.push('slow release')
+  if (narcoticLoad > 0.2) tags.push('suppresses streaming')
+  if (volatiles > 300) tags.push('strongly odorous')
+  if (volatiles > 300 && total < 1.5) tags.push('lure')
 
   const result: FoodAnalysis = {
     dryMatter: 100 - def.comp.water,
@@ -796,6 +1155,8 @@ export function analyse(def: FoodDef): FoodAnalysis {
     residue,
     breakdown,
     toxinLoad,
+    narcoticLoad,
+    volatiles,
     tags,
     cofactors: { thiamine: def.traces.thiamine ?? 0, heme: def.traces.heme ?? 0 },
   }

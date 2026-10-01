@@ -11,7 +11,28 @@ import type { SavedUi } from './persist'
 /** The simulation lives outside React: no re-render is ever triggered by a step. */
 export const colony = new Colony(DEFAULT_PARAMS, DEFAULT_ENV)
 
+/** Simulated time of the next automatic scatter. Not state: nothing renders it. */
+let nextAutoFeedAt = 0
+
 export type Tool = 'feed' | 'build' | 'inoculate' | 'erase' | 'wipe'
+/**
+ * What a random scatter draws from. "assorted" is everything edible; "chaotic"
+ * is the whole larder, antagonists included, which is what an uncontrolled
+ * surface actually offers an organism - most of it food, some of it a crystal
+ * of salt.
+ */
+export type ScatterSource = 'selected' | 'assorted' | 'chaotic'
+
+const EDIBLE = FOODS.filter((f) => f.category !== 'antagonist').map((f) => f.id)
+const HARMFUL = FOODS.filter((f) => f.category === 'antagonist').map((f) => f.id)
+/** Three edible entries per antagonist, so a chaotic scatter still feeds. */
+const CHAOTIC = [...EDIBLE, ...EDIBLE, ...EDIBLE, ...HARMFUL]
+
+function scatterPool(source: ScatterSource, selectedFoodId: string): string[] {
+  if (source === 'assorted') return EDIBLE
+  if (source === 'chaotic') return CHAOTIC
+  return [selectedFoodId]
+}
 export type Panel = 'food' | 'build' | 'environment' | 'colony' | 'about'
 
 export interface FoodMarker {
@@ -85,7 +106,21 @@ interface State {
   setBrightness: (b: number) => void
   setPalette: (id: string) => void
   clearMould: () => void
-  scatterFood: (count: number) => void
+  scatterFood: (count: number, pad?: number) => void
+  /** What a random scatter draws from. */
+  scatterSource: ScatterSource
+  setScatterSource: (s: ScatterSource) => void
+  /** Drop a scatter automatically every so often, so the colony keeps moving. */
+  autoFeed: boolean
+  toggleAutoFeed: () => void
+  /** Simulated hours between automatic drops. */
+  autoFeedHours: number
+  setAutoFeedHours: (h: number) => void
+  /** How far beyond the colony's own footprint automatic drops may land, in mm. */
+  autoFeedReach: number
+  setAutoFeedReach: (mm: number) => void
+  /** Called from the render loop; drops a scatter when one is due. */
+  tickAutoFeed: () => void
   scatterCount: number
   setScatterCount: (n: number) => void
   /** Scatter only enough to cover upkeep, rather than an arbitrary mass. */
@@ -145,6 +180,10 @@ export const useStore = create<State>((set, get) => ({
   brightness: 1,
   paletteId: 'gold',
   scatterCount: 8,
+  scatterSource: 'selected' as ScatterSource,
+  autoFeed: false,
+  autoFeedHours: 6,
+  autoFeedReach: 30,
   scatterRation: true,
   scatterHours: 8,
   paused: false,
@@ -198,18 +237,58 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setScatterCount: (scatterCount) => set({ scatterCount }),
+  setScatterSource: (scatterSource) => set({ scatterSource }),
+  setAutoFeedHours: (autoFeedHours) => set({ autoFeedHours }),
+  setAutoFeedReach: (autoFeedReach) => set({ autoFeedReach }),
+  toggleAutoFeed: () =>
+    set((s) => {
+      // Start the clock from now, so switching it on does not immediately dump
+      // a scatter because the colony happens to be eight hours old.
+      nextAutoFeedAt = colony.timeMin + s.autoFeedHours * 60
+      return { autoFeed: !s.autoFeed }
+    }),
+
+  /**
+   * The drip feed.
+   *
+   * Timed in simulated minutes rather than real seconds, so it keeps the same
+   * meaning whatever the clock is set to: "a scatter every six hours" is a
+   * statement about the organism's life, not about how long you were watching.
+   */
+  tickAutoFeed: () => {
+    const s = get()
+    if (!s.autoFeed || s.paused) return
+    if (colony.timeMin < nextAutoFeedAt) return
+    nextAutoFeedAt = colony.timeMin + Math.max(0.1, s.autoFeedHours) * 60
+    const pool = scatterPool(s.scatterSource, s.selectedFoodId)
+    colony.scatterBeyond(pool, s.scatterCount, s.autoFeedReach, (id) => {
+      if (!s.scatterRation) return s.placeMassMg ?? FOOD_BY_ID[id].defaultMassMg
+      const share = colony.rationMassMg(id, s.scatterHours) / Math.max(1, s.scatterCount)
+      return share > 0.01 ? Math.max(6, share) : FOOD_BY_ID[id].defaultMassMg
+    })
+    set({ markers: markersOf(colony), stats: colony.buildStats() })
+  },
 
   setScatterHours: (scatterHours) => set({ scatterHours }),
   toggleScatterRation: () => set((s) => ({ scatterRation: !s.scatterRation })),
 
-  scatterFood: (count) => {
-    const { selectedFoodId, placeMassMg, scatterRation, scatterHours } = get()
-    let mass = placeMassMg ?? undefined
-    if (scatterRation) {
-      const total = colony.rationMassMg(selectedFoodId, scatterHours)
-      mass = Math.max(6, total / Math.max(1, count))
-    }
-    colony.scatterFood(selectedFoodId, count, mass)
+  scatterFood: (count, pad) => {
+    const { selectedFoodId, placeMassMg, scatterRation, scatterHours, scatterSource } = get()
+    const pool = scatterPool(scatterSource, selectedFoodId)
+    colony.scatterFood(
+      pool,
+      count,
+      (id) => {
+        if (!scatterRation) return placeMassMg ?? FOOD_BY_ID[id].defaultMassMg
+        // Every food has its own yield, so the upkeep ration is worked out per
+        // deposit rather than once for the whole scatter. Anything with no yield
+        // at all - a salt crystal, a quinine crystal - has no ration to compute,
+        // so it goes down at its own default mass.
+        const share = colony.rationMassMg(id, scatterHours) / Math.max(1, count)
+        return share > 0.01 ? Math.max(6, share) : FOOD_BY_ID[id].defaultMassMg
+      },
+      pad,
+    )
     set({ markers: markersOf(colony), stats: colony.buildStats() })
   },
   setPlaceMass: (placeMassMg) => set({ placeMassMg }),
@@ -418,11 +497,25 @@ function boot() {
 boot()
 
 if (typeof window !== 'undefined') {
-  // Autosave on a slow timer, and once more on the way out.
+  // Autosave.
+  //
+  // It used to skip while the clock was stopped, which meant the one thing
+  // people most expect to survive a reload - a map they paused to build - was
+  // the one thing that never got saved. So it watches the vessel's revision
+  // instead: if anything has been placed, removed or seeded since the last
+  // save, it writes, running or not. An unchanged scene costs nothing.
+  let savedRevision = -1
+  let savedAtMin = -1
   window.setInterval(() => {
     const s = useStore.getState()
-    if (s.paused) return
+    const changed = colony.revision !== savedRevision
+    // While it is running the swarm itself is worth re-saving now and then,
+    // even with nothing placed.
+    const moved = !s.paused && colony.timeMin - savedAtMin > 1
+    if (!changed && !moved) return
+    savedRevision = colony.revision
+    savedAtMin = colony.timeMin
     s.saveNow()
-  }, 15000)
+  }, 5000)
   window.addEventListener('beforeunload', () => useStore.getState().saveNow())
 }

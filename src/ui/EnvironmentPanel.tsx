@@ -340,7 +340,7 @@ export function EnvironmentPanel() {
           label="Vessel size"
           value={params.grid}
           min={48}
-          max={160}
+          max={1000}
           step={8}
           unit=" mm"
           digits={0}
@@ -358,7 +358,7 @@ export function EnvironmentPanel() {
           onChange={(v) => setParam('maxMotes', v)}
         />
         <Row label="Voxels" value={(params.grid ** 3).toLocaleString()} />
-        <Row label="Vessel volume" value={`${(params.grid ** 3 / 1000).toFixed(0)} mL`} />
+        <Row label="Vessel volume" value={`${(params.grid ** 3 / 1e6).toFixed(2)} L`} />
       </Section>
     </div>
   )

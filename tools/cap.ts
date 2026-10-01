@@ -1,9 +1,19 @@
-import { Colony, DEFAULT_ENV, DEFAULT_PARAMS, FIXED_STEP_MIN, maxGridSize, MAX_VOXELS } from '../src/sim/colony'
+import {
+  Colony,
+  DEFAULT_ENV,
+  DEFAULT_PARAMS,
+  FIXED_STEP_MIN,
+  maxGridSize,
+} from '../src/sim/colony'
 
-console.log(`vessel cap: ${maxGridSize()} mm (${MAX_VOXELS.toLocaleString()} voxel ceiling)`)
+console.log(`vessel cap: ${maxGridSize()} mm`)
 const c = new Colony({ ...DEFAULT_PARAMS, grid: 96, maxMotes: 20000 }, { ...DEFAULT_ENV })
 c.setParams({ grid: 400 })
-console.log(`asked for 400 mm, got ${c.n} mm -> clamped: ${c.n <= maxGridSize()}`)
+console.log(`asked for 400 mm, got ${c.n} mm -> allowed: ${c.n === 400}`)
+console.log(`  empty 400 mm vessel holds ${(c.fieldBytes / 1048576).toFixed(2)} MB of field`)
+c.setParams({ grid: 1000 })
+console.log(`asked for 1000 mm, got ${c.n} mm`)
+console.log(`  empty 1 m vessel holds ${(c.fieldBytes / 1048576).toFixed(2)} MB of field`)
 
 // a deposit with a large indigestible fraction must still be cleared away
 const d = new Colony({ ...DEFAULT_PARAMS, grid: 64, maxMotes: 20000 }, { ...DEFAULT_ENV })

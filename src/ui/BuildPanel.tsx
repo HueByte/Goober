@@ -1,7 +1,8 @@
 import { MATERIALS, SOLID_KINDS, SOLID_KIND_BY_ID } from '../sim/solids'
 import type { Material } from '../sim/solids'
-import { BYTES_PER_VOXEL, maxGridSize } from '../sim/colony'
-import { useStore } from '../state/store'
+import { colony, useStore } from '../state/store'
+import { BYTES_PER_BRICK, maxGridSize } from '../sim/colony'
+import { BRICK } from '../sim/field'
 import { Row, Section, Slider, fmt } from './controls'
 
 const MATERIAL_ORDER: Material[] = ['agar', 'paper', 'wood', 'plastic', 'glass', 'metal']
@@ -38,6 +39,13 @@ export function BuildPanel() {
     shown[2] = t
   }
 
+  // Field memory follows the colony rather than the vessel, so it is read off
+  // the lattice each render rather than computed from the vessel size.
+  const fieldBudgetMb = useStore((st) => st.params.fieldBudgetMb)
+  useStore((st) => st.stats)
+  const fieldBytes = colony.fieldBytes
+  const budgetReached = colony.fieldBudgetReached
+
   return (
     <div className="panel-body">
       <Section
@@ -52,15 +60,30 @@ export function BuildPanel() {
           step={8}
           unit=" mm"
           digits={0}
-          hint="Changing this rescales everything in the vessel. A bigger plate costs nothing until the colony spreads into it."
+          hint="Changing this rescales everything in the vessel. The lattice is sparse, so an empty metre of agar costs nothing - what you pay for is where the colony actually goes."
           onChange={(v) => setParam('grid', v)}
         />
+        <Slider
+          label="Memory budget"
+          value={fieldBudgetMb}
+          min={64}
+          max={1024}
+          step={32}
+          unit=" MB"
+          digits={0}
+          hint="How much field storage the colony may take. Reaching it does not restart or break anything: the colony simply stops being able to spread into new ground."
+          onChange={(v) => setParam('fieldBudgetMb', v)}
+        />
         <div className="kv-grid">
-          <Row label="Volume" value={`${(grid ** 3 / 1000).toFixed(0)} mL`} />
+          <Row label="Volume" value={`${(grid ** 3 / 1e6).toFixed(1)} L`} />
           <Row
             label="Field memory"
-            value={`${((grid ** 3 * BYTES_PER_VOXEL) / 1048576).toFixed(0)} MB`}
-            tone={grid ** 3 * BYTES_PER_VOXEL > 70 * 1048576 ? 'warn' : undefined}
+            value={`${(fieldBytes / 1048576).toFixed(1)} of ${fieldBudgetMb} MB`}
+            tone={budgetReached ? 'warn' : undefined}
+          />
+          <Row
+            label="Occupied"
+            value={`${((fieldBytes / BYTES_PER_BRICK) * (BRICK ** 3) / 1000).toFixed(0)} mL of agar`}
           />
           <Row
             label="Autosaved"

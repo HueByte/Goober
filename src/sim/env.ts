@@ -15,6 +15,10 @@ export interface EnvSample {
   osmolarity: number
   toxin: number
   repel: number
+  /** Volatile attractant: smelt at a distance, and no guarantee of a meal. */
+  lure: number
+  /** Suppression of the contraction rhythm, 0..1-ish. */
+  narcotic: number
 }
 
 export class EnvGrid {
@@ -25,6 +29,17 @@ export class EnvGrid {
   osmo: Float32Array
   toxin: Float32Array
   repel: Float32Array
+  lure: Float32Array
+  narcotic: Float32Array
+  /**
+   * Whether anything on the plate contributes to each field at all. These
+   * lattices are far coarser than the nutrient ones - the chemistry they carry
+   * changes over millimetres, not micrometres - so the empty case is worth
+   * short-circuiting, and the non-empty case is worth interpolating.
+   */
+  private anyRepel = false
+  private anyLure = false
+  private anyNarcotic = false
 
   constructor(n: number, worldSize: number) {
     this.n = n
@@ -35,6 +50,8 @@ export class EnvGrid {
     this.osmo = new Float32Array(len)
     this.toxin = new Float32Array(len)
     this.repel = new Float32Array(len)
+    this.lure = new Float32Array(len)
+    this.narcotic = new Float32Array(len)
   }
 
   private idx(x: number, y: number, z: number): number {
@@ -61,8 +78,57 @@ export class EnvGrid {
     return this.toxin[this.idx(x, y, z)]
   }
 
+  /**
+   * Trilinear sample.
+   *
+   * This matters more than it looks. A mote's sensors sit 1.7 mm apart and a
+   * cell of this lattice is nearly 5 mm across, so reading the nearest cell
+   * gives every sensor the same number and the gradient the organism is
+   * supposed to be following disappears entirely. Interpolating recovers it:
+   * the field is smooth to begin with, and this is what makes it smooth to
+   * something standing inside one cell of it.
+   */
+  private sample(f: Float32Array, x: number, y: number, z: number): number {
+    const n = this.n
+    const last = n - 1
+    let fx = x * this.toVoxel - 0.5
+    let fy = y * this.toVoxel - 0.5
+    let fz = z * this.toVoxel - 0.5
+    fx = fx < 0 ? 0 : fx > last ? last : fx
+    fy = fy < 0 ? 0 : fy > last ? last : fy
+    fz = fz < 0 ? 0 : fz > last ? last : fz
+    const ix = fx | 0
+    const iy = fy | 0
+    const iz = fz | 0
+    const jx = ix < last ? ix + 1 : ix
+    const jy = iy < last ? iy + 1 : iy
+    const jz = iz < last ? iz + 1 : iz
+    const tx = fx - ix
+    const ty = fy - iy
+    const tz = fz - iz
+    const r0 = n * (iy + n * iz)
+    const r1 = n * (jy + n * iz)
+    const r2 = n * (iy + n * jz)
+    const r3 = n * (jy + n * jz)
+    const c00 = f[r0 + ix] + (f[r0 + jx] - f[r0 + ix]) * tx
+    const c10 = f[r1 + ix] + (f[r1 + jx] - f[r1 + ix]) * tx
+    const c01 = f[r2 + ix] + (f[r2 + jx] - f[r2 + ix]) * tx
+    const c11 = f[r3 + ix] + (f[r3 + jx] - f[r3 + ix]) * tx
+    const c0 = c00 + (c10 - c00) * ty
+    const c1 = c01 + (c11 - c01) * ty
+    return c0 + (c1 - c0) * tz
+  }
+
   repelAt(x: number, y: number, z: number): number {
-    return this.repel[this.idx(x, y, z)]
+    return this.anyRepel ? this.sample(this.repel, x, y, z) : 0
+  }
+
+  lureAt(x: number, y: number, z: number): number {
+    return this.anyLure ? this.sample(this.lure, x, y, z) : 0
+  }
+
+  narcoticAt(x: number, y: number, z: number): number {
+    return this.anyNarcotic ? this.sample(this.narcotic, x, y, z) : 0
   }
 
   sampleInto(x: number, y: number, z: number, out: EnvSample): EnvSample {
@@ -71,6 +137,8 @@ export class EnvGrid {
     out.osmolarity = this.osmo[i]
     out.toxin = this.toxin[i]
     out.repel = this.repel[i]
+    out.lure = this.lure[i]
+    out.narcotic = this.narcotic[i]
     return out
   }
 
@@ -81,6 +149,8 @@ export class EnvGrid {
     this.osmo.fill(env.substrateOsmolarity)
     this.toxin.fill(0)
     this.repel.fill(0)
+    this.lure.fill(0)
+    this.narcotic.fill(0)
 
     // Pre-resolve the per-food chemistry so the inner loop is pure arithmetic.
     const src = foods
@@ -92,6 +162,10 @@ export class EnvGrid {
         if (frac <= 0.001) return null
         const radius = Math.max(1, def.radius * Math.cbrt(frac))
         const repellency = def.toxins.reduce((s, t) => s + t.repellency, 0)
+        const narcotic = def.toxins.reduce((s, t) => s + (t.narcosis ?? 0), 0)
+        // Volatiles are reported per 100 g; a few hundred mg is a food that can
+        // be smelt, a few thousand is one that can be smelt across the vessel.
+        const lure = (def.volatiles ?? 0) / 1000
         return {
           x: f.x,
           y: f.y,
@@ -105,6 +179,16 @@ export class EnvGrid {
            */
           repelSigma2: 2 * (radius * 4.5) ** 2,
           repelReach: radius * 12,
+          /**
+           * Vapour carries much further than anything dissolved, and is not held
+           * up by the agar, so the attractant plume is by far the widest field
+           * here - tens of millimetres, not the two or three a solute manages.
+           * That is the whole point of a volatile: it advertises.
+           */
+          lureSigma2: 2 * (radius * 4 + 22) ** 2,
+          lureReach: radius * 4 + 70,
+          lure,
+          narcotic,
           // A partly consumed deposit is also a partly diluted one.
           strength: frac,
           ph: def.ph,
@@ -117,6 +201,10 @@ export class EnvGrid {
         }
       })
       .filter((s): s is NonNullable<typeof s> => s !== null)
+
+    this.anyRepel = src.some((f) => f.repellency > 0) || env.substrateOsmolarity > 300
+    this.anyLure = src.some((f) => f.lure > 0)
+    this.anyNarcotic = src.some((f) => f.narcotic > 0)
 
     if (src.length > 0) {
       for (let iz = 0; iz < n; iz++) {
@@ -133,6 +221,8 @@ export class EnvGrid {
             let osmoAcc = env.substrateOsmolarity
             let tox = 0
             let rep = 0
+            let lur = 0
+            let nar = 0
             for (let s = 0; s < src.length; s++) {
               const f = src[s]
               const dx = wx - f.x
@@ -141,6 +231,12 @@ export class EnvGrid {
               const d2 = dx * dx + dy * dy + dz * dz
               if (f.repellency > 0 && d2 < f.repelReach * f.repelReach) {
                 rep += f.strength * f.repellency * Math.exp(-d2 / f.repelSigma2)
+              }
+              if (f.lure > 0 && d2 < f.lureReach * f.lureReach) {
+                lur += f.strength * f.lure * Math.exp(-d2 / f.lureSigma2)
+              }
+              if (f.narcotic > 0 && d2 < f.repelReach * f.repelReach) {
+                nar += f.strength * f.narcotic * Math.exp(-d2 / f.repelSigma2)
               }
               if (d2 > f.reach * f.reach) continue
               const w = f.strength * Math.exp(-d2 / f.sigma2)
@@ -154,6 +250,8 @@ export class EnvGrid {
             this.ph[i] = phAcc / wSum
             this.osmo[i] = osmo
             this.toxin[i] = tox
+            this.lure[i] = lur
+            this.narcotic[i] = nar
             // Hypertonic ground is avoided in its own right, independently of
             // whether anything in it is chemically toxic.
             this.repel[i] = rep + clamp((osmo - 300) / 700, 0, 1.6)
@@ -163,6 +261,7 @@ export class EnvGrid {
     } else {
       const baseRepel = clamp((env.substrateOsmolarity - 300) / 700, 0, 1.6)
       if (baseRepel > 0) this.repel.fill(baseRepel)
+      this.anyRepel = baseRepel > 0
     }
   }
 }

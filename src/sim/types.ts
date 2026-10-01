@@ -56,6 +56,14 @@ export interface Toxin {
   potency: number
   /** How strongly the plasmodium steers away from it (chemorepulsion). */
   repellency: number
+  /**
+   * How strongly this compound suppresses the contraction rhythm that drives
+   * cytoplasmic streaming, at the concentration this food carries it. Zero is no
+   * effect, one brings streaming to a standstill. Narcosis is not damage - the
+   * plasmodium recovers as soon as it leaves - which is why it is tracked apart
+   * from potency.
+   */
+  narcosis?: number
   note: string
 }
 
@@ -67,7 +75,14 @@ export interface Toxin {
  */
 export type FoodMatrix = 'gel' | 'liquid' | 'powder' | 'flake' | 'solid' | 'crystal' | 'cells'
 
-export type FoodCategory = 'classic' | 'carbohydrate' | 'protein' | 'complex' | 'defined' | 'antagonist'
+export type FoodCategory =
+  | 'classic'
+  | 'carbohydrate'
+  | 'protein'
+  | 'complex'
+  | 'defined'
+  | 'stimulus'
+  | 'antagonist'
 
 /**
  * How a deposit is drawn. Physical form, not decoration: a flake is a thin
@@ -105,6 +120,22 @@ export interface FoodDef {
   /** Radius of the deposit in grid units at full mass. */
   radius: number
   toxins: Toxin[]
+  /**
+   * Volatile organics, mg per 100 g. These leave the deposit as vapour and carry
+   * far further through the agar and the air than anything in solution does, so
+   * the colony smells them long before it is anywhere near enough to eat. A food
+   * can therefore be found at a distance out of all proportion to what it is
+   * actually worth, which is how a lure works.
+   */
+  volatiles?: number
+  /**
+   * Molar mass of the inert fraction, when that fraction is a dissolved
+   * non-electrolyte rather than indigestible structure. Set it and the inert
+   * mass becomes osmotically active - which is the entire mechanism of a
+   * humectant like glycerol, that does no chemical harm at all and still stops
+   * the colony dead.
+   */
+  inertMolarMass?: number
   /** Free-text realism notes surfaced in the inspector. */
   notes: string[]
 }
@@ -130,8 +161,14 @@ export interface FoodInstance {
 }
 
 export interface SimParams {
-  /** Grid resolution per axis. */
+  /** Vessel edge in millimetres, which is also the lattice resolution per axis. */
   grid: number
+  /**
+   * Ceiling on field storage, in megabytes. The lattice is sparse, so this caps
+   * how much of the vessel the colony may occupy at once rather than how big the
+   * vessel can be - a metre of empty agar is free either way.
+   */
+  fieldBudgetMb: number
   maxMotes: number
   /** Simulated minutes per real-time second at 1x. */
   minutesPerSecond: number

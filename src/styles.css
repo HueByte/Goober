@@ -131,6 +131,43 @@ select,
   cursor: pointer;
 }
 
+.field-label,
+.field-head {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 10px 0 4px;
+}
+
+.field-head {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  margin-top: 14px;
+}
+
+.ghost-btn.wide {
+  width: 100%;
+  text-align: center;
+}
+
+.btn-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn-row .ghost-btn {
+  flex: 1 1 auto;
+  text-align: center;
+  text-transform: lowercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ghost-btn.tiny {
   border: none;
   border-radius: 0;

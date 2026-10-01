@@ -22,7 +22,7 @@ for (let h = 1; h <= 40; h++) {
       for (let x = 0; x < grid; x++) {
         const d = Math.hypot(x - fx, z - 48)
         if (d > 6) continue
-        const i = x + grid * (y + grid * z)
+        const i = c.lattice.index(x, y, z)
         if (c.vein.data[i] > 8) tube++
         bodyThere += c.bio.data[i]
       }

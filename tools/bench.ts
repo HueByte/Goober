@@ -16,15 +16,11 @@ function build(presetId: string, grid: number) {
   return c
 }
 
-/** What the renderer does every few frames: a full sweep of a field. */
+/** What the renderer does every few frames: a sweep of the allocated bricks. */
 function sweep(data: Float32Array, n: number, threshold: number) {
+  void n
   let k = 0
-  for (let z = 0; z < n; z++) {
-    for (let y = 0; y < n; y++) {
-      const row = n * (y + n * z)
-      for (let x = 0; x < n; x++) if (data[row + x] > threshold) k++
-    }
-  }
+  for (let i = 0; i < data.length; i++) if (data[i] > threshold) k++
   return k
 }
 
