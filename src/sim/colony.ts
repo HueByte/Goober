@@ -132,6 +132,7 @@ export const DEFAULT_PARAMS: SimParams = {
   repellentAversion: 3.2,
   surfaceAffinity: 1.6,
   cohesion: 3.2,
+  recruitment: 1.2,
   circulation: 0.35,
 }
 
@@ -173,7 +174,7 @@ const CROWDING_LIMIT = 150
  * appears out of nowhere - which robs the whole thing of the moment where the
  * front actually arrives.
  */
-const CONNECTION_FLOOR = 11
+const CONNECTION_FLOOR = 45 // ~5 nuclei packed together, not two in passing
 /**
  * Biomass density, ug per voxel, at which a nucleus is fully carried by the
  * cytoplasm around it.
@@ -193,6 +194,21 @@ const UNSUPPORTED_SPEED = 0.45
  * worth following, but it is a promise rather than a meal, so it is deliberately
  * cheaper per unit than the dissolved nutrient it is meant to advertise.
  */
+/**
+ * Biomass density, ug per voxel, at which a find stops being news.
+ *
+ * Measured: a signal emitted by everything that is eating rewards the status
+ * quo. The body is already sitting on the food it found first, so that is where
+ * the shouting comes from, and raising the volume pinned the colony harder to
+ * where it already was - exactly backwards. What carries information is a find
+ * the organism is *not* already exploiting, so the emission is weighted down by
+ * how much of the body is there to hear it in person.
+ */
+const RECRUIT_CROWD = 30
+/** Signal strength at which a nucleus is half as interested as it can be. */
+const RECRUIT_KM = 0.06
+/** Fraction of the signal lost each simulated minute. */
+const RECRUIT_DECAY = 0.06
 const LURE_SCALE = 2.4
 /** How much of a smell counts as a find, for the purpose of getting excited. */
 const LURE_EXCITE = 1.6
@@ -366,6 +382,35 @@ export interface ColonySnapshot {
 export interface StepReport {
   substeps: number
   simMinutes: number
+}
+
+
+/**
+ * Does this solid pass through this voxel at all?
+ *
+ * Testing the voxel's centre is not the same question, and the difference is a
+ * hole. A two-millimetre wall turned forty-five degrees occupies the right
+ * number of voxels, but by centres alone those voxels only touch at their
+ * corners - a staircase, not a wall - and anything moving diagonally walks
+ * straight between them. Measured: zero motes crossed such a wall at yaw 0, and
+ * 252 crossed the same wall at yaw 0.79.
+ *
+ * So the voxel is sampled on a grid fine enough that nothing the slab passes
+ * through can be missed: a third of a millimetre, against the thinnest object
+ * worth building. Short-circuits on the first hit, and only runs when the solids
+ * change.
+ */
+function voxelMeetsSolid(s: SolidInstance, x: number, y: number, z: number): boolean {
+  for (let k = 0; k < 3; k++) {
+    const sz = z + (k + 0.5) / 3
+    for (let j = 0; j < 3; j++) {
+      const sy = y + (j + 0.5) / 3
+      for (let i = 0; i < 3; i++) {
+        if (solidContains(s, x + (i + 0.5) / 3, sy, sz)) return true
+      }
+    }
+  }
+  return false
 }
 
 export class Colony {
@@ -1015,7 +1060,7 @@ export class Colony {
       for (let z = z0; z <= z1; z++) {
         for (let y = y0; y <= y1; y++) {
           for (let x = x0; x <= x1; x++) {
-            if (!solidContains(s, x + 0.5, y + 0.5, z + 0.5)) continue
+            if (!voxelMeetsSolid(s, x, y, z)) continue
             mask.data[L.cell(x, y, z)] = 1
             // Stamp grip into the surrounding voxels, so a mote alongside a face
             // has something to hold on to.
@@ -1556,7 +1601,9 @@ export class Colony {
 
     // --- environmental chemistry, refreshed about once a simulated minute ---
     if (this.envDirty || this.timeMin - this.envRebuiltAt > 1) {
+      const since = Math.min(30, Math.max(0.01, this.timeMin - this.envRebuiltAt))
       this.envGrid.rebuild(this.foods, E)
+      this.envGrid.stepRecruit(1 - Math.exp(-RECRUIT_DECAY * since))
       this.envDirty = false
       this.envRebuiltAt = this.timeMin
     }
@@ -1767,6 +1814,8 @@ export class Colony {
       // this gives a cloud of independent foragers that never coalesces.
       const retract = withdrawing ? RETRACT_WEIGHT : 0
       const cohesion = P.cohesion * (0.3 + 0.95 * sat) * (withdrawing ? 2.2 : 1)
+      // A hungry nucleus answers the call; a full one has no reason to.
+      const recruitPull = P.recruitment * P.nutrientAffinity * (0.25 + 1.1 * (1 - sat))
       const novelty = withdrawing
         ? 0
         : beside
@@ -1820,6 +1869,9 @@ export class Colony {
         // solution, which is what lets the colony set off towards something it
         // has no other way of knowing is there - and what lets a lure work.
         const vol = this.envGrid.lureAt(qx, qy, qz)
+        // Where the organism is already feeding. This is the only term a mote
+        // reads that was written by another mote on purpose.
+        const call = this.envGrid.recruitAt(qx, qy, qz)
         // Thigmotaxis: a wettable surface is worth following, which is how the
         // front gets up the side of things instead of only around them.
         const surf =
@@ -1849,7 +1901,8 @@ export class Colony {
           stale +
           P.trailAffinity * TRAIL_WEIGHT * michaelis(tr, TRAIL_KM) +
           P.nutrientAffinity * (appC * Math.sqrt(c) + appP * Math.sqrt(p)) +
-          P.nutrientAffinity * LURE_SCALE * vol -
+          P.nutrientAffinity * LURE_SCALE * vol +
+          recruitPull * michaelis(call, RECRUIT_KM) -
           aversion * REPEL_SCALE * this.envGrid.repelAt(qx, qy, qz) -
           LIGHT_SCALE * lightBias * sy
         // Search commitment: a hungry front pushes on rather than dithering.
@@ -2129,6 +2182,10 @@ export class Colony {
       // ------------------------------------------------------------------
       // Uptake: Michaelis-Menten, capped by remaining store capacity.
       // ------------------------------------------------------------------
+      // How much of a discovery this is: everything, for a scout on its own on
+      // fresh substrate; almost nothing, for one more nucleus in a mass already
+      // feeding, which has no one left to tell.
+      const news = 1 / (1 + Math.max(0, around) / RECRUIT_CROWD)
       const scale = bm / BIO.kinetics.referenceBiomassUg
       const cHere = this.carb.nearest(nx, ny, nz)
       const pHere = this.prot.nearest(nx, ny, nz)
@@ -2142,6 +2199,8 @@ export class Colony {
         const got = this.carb.take(nx, ny, nz, want)
         cs += got
         this.intakeCarb += got
+        // Tell the rest of the organism - loudly if this is somewhere new.
+        this.envGrid.addRecruit(nx, ny, nz, got * news)
       }
       if (roomP > 0 && pHere > 0) {
         const want = Math.min(
@@ -2151,6 +2210,7 @@ export class Colony {
         const got = this.prot.take(nx, ny, nz, want)
         ps += got
         this.intakeProtein += got
+        this.envGrid.addRecruit(nx, ny, nz, got * news)
       }
 
       // ------------------------------------------------------------------

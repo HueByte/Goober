@@ -602,11 +602,19 @@ export class Field3D extends BrickStore<Float32Array> {
     this.tmp = data
   }
 
-  /** Sum of the field, over the allocated bricks that intersect the region. */
+  /**
+   * Sum of the field, over the allocated bricks that intersect the region.
+   *
+   * A brick that holds nothing contributes nothing, and it knows it does, so it
+   * is skipped without reading its four thousand cells. The read-out is built
+   * five times a second, and most of what it was adding up was zeroes.
+   */
   total(region?: FieldRegion): number {
     const d = this.data
+    const maxes = this.brickMax
     let s = 0
     this.lattice.forEachBrickIn(region, (slot) => {
+      if (maxes[slot] < FIELD_EPS) return
       const base = slot * BRICK_CELLS
       for (let k = 0; k < BRICK_CELLS; k++) s += d[base + k]
     })
@@ -615,8 +623,10 @@ export class Field3D extends BrickStore<Float32Array> {
 
   countAbove(threshold: number, region?: FieldRegion): number {
     const d = this.data
+    const maxes = this.brickMax
     let c = 0
     this.lattice.forEachBrickIn(region, (slot) => {
+      if (maxes[slot] <= threshold) return
       const base = slot * BRICK_CELLS
       for (let k = 0; k < BRICK_CELLS; k++) if (d[base + k] > threshold) c++
     })

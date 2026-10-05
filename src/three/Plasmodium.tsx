@@ -145,8 +145,13 @@ export function Plasmodium() {
       // The lattice is sparse, so the only way through it is brick by brick.
       // That is also the cheap way: an empty vessel has no bricks to visit,
       // however large it is.
+      const veinMax = colony.vein.brickMax
       colony.lattice.forEachBrickIn(r, (slot, bx, by, bz) => {
         if (k >= VEIN_BUDGET) return
+        // Each brick knows the most it holds, so a brick with nothing above the
+        // cut-off in it can be skipped without reading its four thousand cells.
+        // Most of the ground a colony has crossed is exactly that.
+        if (veinMax[slot] <= thr) return
         const base = slot * BRICK_CELLS
         for (let lz = 0; lz < BRICK; lz++) {
           const z = bz * BRICK + lz
@@ -250,8 +255,10 @@ export function Plasmodium() {
       const { position, color, size } = slime
       const thr = slimeThreshold.current
       let k = 0
+      const slimeMax = colony.trail.brickMax
       colony.lattice.forEachBrickIn(r, (slot, bx, by, bz) => {
         if (k >= SLIME_BUDGET) return
+        if (slimeMax[slot] <= thr) return
         const base = slot * BRICK_CELLS
         for (let lz = 0; lz < BRICK; lz++) {
           const z = bz * BRICK + lz

@@ -237,6 +237,15 @@ export function EnvironmentPanel() {
           onChange={(v) => setParam('nutrientAffinity', v)}
         />
         <Slider
+          label="Recruitment"
+          value={params.recruitment}
+          min={0}
+          max={8}
+          step={0.1}
+          hint="how loudly a nucleus that is feeding tells the rest of the organism, and how hard the rest answers. At zero every nucleus is on its own and a find grows a colony where it was found; raised, the body moves onto what it has found."
+          onChange={(v) => setParam('recruitment', v)}
+        />
+        <Slider
           label="Cohesion"
           value={params.cohesion}
           min={0}

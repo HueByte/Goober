@@ -208,6 +208,13 @@ export interface SimParams {
    */
   surfaceAffinity: number
   /**
+   * How loudly a nucleus that is feeding tells the rest of the organism, and how
+   * hard the rest answers. This is the only channel the swarm has for saying
+   * anything to itself: at zero every nucleus is on its own and a find produces
+   * a colony on the food, and raised, the body moves onto what it has found.
+   */
+  recruitment: number
+  /**
    * How strongly the plasmodium holds together. This is the one that decides
    * whether it behaves as a single cell that morphs towards food or as a cloud
    * of independent foragers: it is one organism, and it does not send pieces of

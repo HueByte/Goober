@@ -32,6 +32,27 @@ export class EnvGrid {
   lure: Float32Array
   narcotic: Float32Array
   /**
+   * Recruitment.
+   *
+   * The one thing the swarm had no way of doing was telling each other
+   * anything. A nucleus that found food grew and divided where it stood, and
+   * the rest of the organism, a few centimetres away, had no idea - so a find
+   * produced a colony on the food instead of the body moving onto it.
+   *
+   * A plasmodium does have a way: feeding changes the contraction rhythm, and
+   * the phase wave propagates through the cytoplasm far faster than any
+   * molecule diffuses, which is what redirects streaming towards a stimulated
+   * region. This is that signal. It is emitted by whatever is actually eating,
+   * it travels much further and faster than the nutrient plume it advertises,
+   * and every nucleus can read it - so the find is the organism's, not the
+   * finder's.
+   *
+   * It lives on this coarse lattice deliberately. A recruitment signal only has
+   * to say which way, not which voxel, and at five millimetres a cell it costs
+   * a few thousand operations a minute instead of a few million.
+   */
+  recruit: Float32Array
+  /**
    * Whether anything on the plate contributes to each field at all. These
    * lattices are far coarser than the nutrient ones - the chemistry they carry
    * changes over millimetres, not micrometres - so the empty case is worth
@@ -40,6 +61,8 @@ export class EnvGrid {
   private anyRepel = false
   private anyLure = false
   private anyNarcotic = false
+  private recruitTmp: Float32Array
+  private anyRecruit = false
 
   constructor(n: number, worldSize: number) {
     this.n = n
@@ -52,6 +75,8 @@ export class EnvGrid {
     this.repel = new Float32Array(len)
     this.lure = new Float32Array(len)
     this.narcotic = new Float32Array(len)
+    this.recruit = new Float32Array(len)
+    this.recruitTmp = new Float32Array(len)
   }
 
   private idx(x: number, y: number, z: number): number {
@@ -129,6 +154,63 @@ export class EnvGrid {
 
   narcoticAt(x: number, y: number, z: number): number {
     return this.anyNarcotic ? this.sample(this.narcotic, x, y, z) : 0
+  }
+
+  recruitAt(x: number, y: number, z: number): number {
+    return this.anyRecruit ? this.sample(this.recruit, x, y, z) : 0
+  }
+
+  /** A nucleus that is taking up substrate tells the rest of the organism. */
+  addRecruit(x: number, y: number, z: number, amount: number): void {
+    if (amount <= 0) return
+    this.recruit[this.idx(x, y, z)] += amount
+    this.anyRecruit = true
+  }
+
+  /**
+   * Spread the signal and let it fade. Several passes per call, because the
+   * point of it is to arrive somewhere the food itself never will - and on a
+   * lattice this coarse, several passes are still almost free.
+   */
+  stepRecruit(decay: number, passes = 3, mix = 0.7): void {
+    if (!this.anyRecruit) return
+    const n = this.n
+    const nn = n * n
+    const keep = 1 - decay
+    let src = this.recruit
+    let dst = this.recruitTmp
+    const sixth = mix / 6
+    for (let p = 0; p < passes; p++) {
+      for (let z = 0; z < n; z++) {
+        for (let y = 0; y < n; y++) {
+          const row = nn * z + n * y
+          for (let x = 0; x < n; x++) {
+            const i = row + x
+            const c = src[i]
+            // The vessel wall reflects: a signal does not leave the organism.
+            const sum =
+              src[x > 0 ? i - 1 : i] +
+              src[x < n - 1 ? i + 1 : i] +
+              src[y > 0 ? i - n : i] +
+              src[y < n - 1 ? i + n : i] +
+              src[z > 0 ? i - nn : i] +
+              src[z < n - 1 ? i + nn : i]
+            dst[i] = c * (1 - mix) + sum * sixth
+          }
+        }
+      }
+      const swap = src
+      src = dst
+      dst = swap
+    }
+    let peak = 0
+    for (let i = 0; i < src.length; i++) {
+      const v = (src[i] *= keep)
+      if (v > peak) peak = v
+    }
+    this.recruit = src
+    this.recruitTmp = dst
+    this.anyRecruit = peak > 1e-6
   }
 
   sampleInto(x: number, y: number, z: number, out: EnvSample): EnvSample {
