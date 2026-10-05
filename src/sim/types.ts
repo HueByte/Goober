@@ -297,6 +297,11 @@ export interface ColonyStats {
   veinMass: number
   /** Motes currently gripping a surface, and spans that have torn. */
   adhered: number
+  /**
+   * 0 while the colony is working what it has, 1 once it has given up on where
+   * it is and committed to searching. The two are different organisms to watch.
+   */
+  foraging: number
   airborne: number
   tears: number
   solids: number

@@ -21,6 +21,9 @@ export interface EnvSample {
   narcotic: number
 }
 
+/** How strongly a millimetre of solid attenuates anything passing through it. */
+const OCCLUSION = 1.6
+
 export class EnvGrid {
   readonly n: number
   readonly worldSize: number
@@ -53,6 +56,17 @@ export class EnvGrid {
    */
   recruit: Float32Array
   /**
+   * How much of each cell is solid, 0..1.
+   *
+   * Chemistry does not go through walls. A quinine crystal on the far side of a
+   * barrier was repelling the colony through it, a volatile was advertising
+   * through it, and the recruitment signal - which travels through the
+   * cytoplasm, and so cannot leave the organism at all - was crossing to places
+   * the organism could not. This is what every one of those is attenuated by.
+   */
+  solidFrac: Float32Array
+  private anySolid = false
+  /**
    * Whether anything on the plate contributes to each field at all. These
    * lattices are far coarser than the nutrient ones - the chemistry they carry
    * changes over millimetres, not micrometres - so the empty case is worth
@@ -77,6 +91,7 @@ export class EnvGrid {
     this.narcotic = new Float32Array(len)
     this.recruit = new Float32Array(len)
     this.recruitTmp = new Float32Array(len)
+    this.solidFrac = new Float32Array(len)
   }
 
   private idx(x: number, y: number, z: number): number {
@@ -160,6 +175,77 @@ export class EnvGrid {
     return this.anyRecruit ? this.sample(this.recruit, x, y, z) : 0
   }
 
+  /**
+   * Take the vessel's obstacles at this lattice's resolution.
+   *
+   * `sample` answers whether a point in world space is inside something solid.
+   * Each cell is sampled on a 3x3x3 grid, which at five millimetres a cell is a
+   * fair estimate of how much of it is wall and costs a couple of hundred
+   * thousand tests - only when the objects change.
+   */
+  setObstacles(sample: ((x: number, y: number, z: number) => boolean) | null): void {
+    const n = this.n
+    const cell = this.worldSize / n
+    this.solidFrac.fill(0)
+    this.anySolid = false
+    if (!sample) return
+    for (let iz = 0; iz < n; iz++) {
+      for (let iy = 0; iy < n; iy++) {
+        const row = n * (iy + n * iz)
+        for (let ix = 0; ix < n; ix++) {
+          let hits = 0
+          for (let c = 0; c < 3; c++) {
+            const wz = (iz + (c + 0.5) / 3) * cell
+            for (let b = 0; b < 3; b++) {
+              const wy = (iy + (b + 0.5) / 3) * cell
+              for (let a = 0; a < 3; a++) {
+                if (sample((ix + (a + 0.5) / 3) * cell, wy, wz)) hits++
+              }
+            }
+          }
+          if (hits > 0) {
+            this.solidFrac[row + ix] = hits / 27
+            this.anySolid = true
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * How much of a signal survives the trip from a deposit to a point.
+   *
+   * A line of sight through the coarse obstacle map, attenuated by how much wall
+   * it passes through rather than switched off by it - a chemical does reach
+   * round a barrier, just very much less of it, and a long enough wall casts a
+   * real shadow because the path through it is longer.
+   */
+  private transmission(
+    fx: number,
+    fy: number,
+    fz: number,
+    tx: number,
+    ty: number,
+    tz: number,
+  ): number {
+    if (!this.anySolid) return 1
+    const dx = tx - fx
+    const dy = ty - fy
+    const dz = tz - fz
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    const cell = this.worldSize / this.n
+    const steps = Math.min(16, Math.max(2, Math.ceil(dist / cell)))
+    let blocked = 0
+    for (let k = 1; k < steps; k++) {
+      const t = k / steps
+      blocked += this.solidFrac[this.idx(fx + dx * t, fy + dy * t, fz + dz * t)]
+    }
+    if (blocked <= 0) return 1
+    // Scaled by how long each step was, so a thick wall blocks more than a thin
+    // one and the answer does not depend on how finely the ray was sampled.
+    return Math.exp((-OCCLUSION * blocked * dist) / steps)
+  }
+
   /** A nucleus that is taking up substrate tells the rest of the organism. */
   addRecruit(x: number, y: number, z: number, amount: number): void {
     if (amount <= 0) return
@@ -179,6 +265,7 @@ export class EnvGrid {
     const keep = 1 - decay
     let src = this.recruit
     let dst = this.recruitTmp
+    const solid = this.solidFrac
     const sixth = mix / 6
     for (let p = 0; p < passes; p++) {
       for (let z = 0; z < n; z++) {
@@ -188,14 +275,47 @@ export class EnvGrid {
             const i = row + x
             const c = src[i]
             // The vessel wall reflects: a signal does not leave the organism.
-            const sum =
-              src[x > 0 ? i - 1 : i] +
-              src[x < n - 1 ? i + 1 : i] +
-              src[y > 0 ? i - n : i] +
-              src[y < n - 1 ? i + n : i] +
-              src[z > 0 ? i - nn : i] +
-              src[z < n - 1 ? i + nn : i]
-            dst[i] = c * (1 - mix) + sum * sixth
+            // The signal travels through the cytoplasm, so it cannot pass
+            // through a wall at all - what is solid simply does not conduct.
+            const here = 1 - solid[i]
+            if (here <= 0.01) {
+              dst[i] = 0
+              continue
+            }
+            let sum = 0
+            let open = 0
+            for (let d = 0; d < 6; d++) {
+              const j =
+                d === 0
+                  ? x > 0
+                    ? i - 1
+                    : i
+                  : d === 1
+                    ? x < n - 1
+                      ? i + 1
+                      : i
+                    : d === 2
+                      ? y > 0
+                        ? i - n
+                        : i
+                      : d === 3
+                        ? y < n - 1
+                          ? i + n
+                          : i
+                        : d === 4
+                          ? z > 0
+                            ? i - nn
+                            : i
+                          : z < n - 1
+                            ? i + nn
+                            : i
+              const pass = 1 - solid[j]
+              sum += src[j] * pass
+              open += pass
+            }
+            // Whatever cannot flow outwards stays where it is, so nothing is
+            // lost into a wall.
+            dst[i] = c * (1 - (mix * open) / 6) + sum * sixth
           }
         }
       }
@@ -311,17 +431,26 @@ export class EnvGrid {
               const dy = wy - f.y
               const dz = wz - f.z
               const d2 = dx * dx + dy * dy + dz * dz
-              if (f.repellency > 0 && d2 < f.repelReach * f.repelReach) {
-                rep += f.strength * f.repellency * Math.exp(-d2 / f.repelSigma2)
+              const inRepel =
+                (f.repellency > 0 || f.narcotic > 0) && d2 < f.repelReach * f.repelReach
+              const inLure = f.lure > 0 && d2 < f.lureReach * f.lureReach
+              const inReach = d2 <= f.reach * f.reach
+              if (!inRepel && !inLure && !inReach) continue
+              // What a wall between here and the deposit leaves of it. Worked
+              // out once per deposit per cell, and only for the cells that were
+              // going to be affected at all.
+              const t = this.transmission(f.x, f.y, f.z, wx, wy, wz)
+              if (t < 1e-3) continue
+              if (inRepel) {
+                const g = f.strength * Math.exp(-d2 / f.repelSigma2) * t
+                rep += g * f.repellency
+                nar += g * f.narcotic
               }
-              if (f.lure > 0 && d2 < f.lureReach * f.lureReach) {
-                lur += f.strength * f.lure * Math.exp(-d2 / f.lureSigma2)
+              if (inLure) {
+                lur += f.strength * f.lure * Math.exp(-d2 / f.lureSigma2) * t
               }
-              if (f.narcotic > 0 && d2 < f.repelReach * f.repelReach) {
-                nar += f.strength * f.narcotic * Math.exp(-d2 / f.repelSigma2)
-              }
-              if (d2 > f.reach * f.reach) continue
-              const w = f.strength * Math.exp(-d2 / f.sigma2)
+              if (!inReach) continue
+              const w = f.strength * Math.exp(-d2 / f.sigma2) * t
               if (w < 1e-4) continue
               wSum += w
               phAcc += w * f.ph

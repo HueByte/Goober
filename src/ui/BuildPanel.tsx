@@ -217,12 +217,21 @@ export function BuildPanel() {
             tone={!climbable ? 'bad' : mat.adhesion > 0.7 ? 'good' : mat.adhesion > 0.45 ? 'warn' : 'bad'}
           />
         </div>
-        <button
-          className={`ghost-btn ${!climbable ? 'active' : ''}`}
-          onClick={toggleClimbable}
-        >
-          {climbable ? 'make next object sheer' : 'sheer: cannot be climbed'}
-        </button>
+        <label className="field-label">Can it be climbed?</label>
+        <div className="btn-row">
+          <button
+            className={`ghost-btn ${!climbable ? 'active' : ''}`}
+            onClick={() => climbable && toggleClimbable()}
+          >
+            sheer
+          </button>
+          <button
+            className={`ghost-btn ${climbable ? 'active' : ''}`}
+            onClick={() => !climbable && toggleClimbable()}
+          >
+            climbable
+          </button>
+        </div>
         <p className="note">
           {climbable
             ? mat.note

@@ -33,6 +33,17 @@ export function ColonyPanel() {
           <Stat label="deaths" value={stats.deaths.toLocaleString()} sub={`network ${stats.networkVoxels.toLocaleString()} vx`} />
         </div>
         <Row label="Limited by" value={LIMIT_LABEL[stats.limiting] ?? stats.limiting} tone="warn" />
+        <Row
+          label="Behaviour"
+          value={
+            stats.foraging > 0.65
+              ? 'searching'
+              : stats.foraging > 0.3
+                ? `giving up on here (${(stats.foraging * 100).toFixed(0)}%)`
+                : 'working what it has'
+          }
+          tone={stats.foraging > 0.65 ? 'warn' : undefined}
+        />
       </Section>
 
       <Section

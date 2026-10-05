@@ -169,10 +169,22 @@ function Solids({ handlers }: { handlers: SurfaceHandlers }) {
             ) : (
               <boxGeometry args={[s.hx * 2, s.hy * 2, s.hz * 2]} />
             )}
+            {/*
+              Whether a thing can be climbed is the single most consequential
+              property an object has, and until now the only way to find out was
+              to read the list. So it is on the object: a sheer face is polished
+              and catches the light, a climbable one is chalky and does not.
+              Nothing to learn - you can see which of them the plasmodium can
+              get a grip on.
+            */}
             <meshStandardMaterial
               color={mat.color}
-              roughness={THREE.MathUtils.clamp(1 - mat.adhesion * 0.55, 0.12, 0.95)}
-              metalness={s.material === 'metal' ? 0.75 : 0.04}
+              roughness={
+                s.climbable
+                  ? THREE.MathUtils.clamp(1 - mat.adhesion * 0.35, 0.55, 0.98)
+                  : 0.06
+              }
+              metalness={s.climbable ? 0.02 : s.material === 'metal' ? 0.85 : 0.55}
               transparent={glassy}
               opacity={glassy ? 0.35 : 1}
             />

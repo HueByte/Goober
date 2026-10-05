@@ -173,7 +173,11 @@ export const useStore = create<State>((set, get) => ({
   solidMaterial: 'plastic',
   solidDims: kindSize(SOLID_KINDS[0].id),
   solidRotated: false,
-  solidClimbable: true,
+  // New objects are sheer by default. A wall people place is nearly always
+  // meant to be a constraint, and a plasmodium climbs anything it can grip - so
+  // the climbable default made every barrier leak over the top, which is
+  // correct behaviour and a surprising answer to "I built a wall".
+  solidClimbable: false,
   solidYaw: 0,
   uiHidden: false,
   wipeRadius: 8,

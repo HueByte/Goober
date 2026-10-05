@@ -301,6 +301,19 @@ const TUBE_ADVANCE = 1.5
  * actively reabsorbed, not just left to fade.
  */
 const WITHDRAW_AFTER_MIN = 110
+/**
+ * Mean store fill below which the colony stops exploiting and starts looking.
+ *
+ * A plasmodium does not have one behaviour, it has two. Fed, it holds a compact
+ * network and reabsorbs anything unproductive. Starved, it abandons that
+ * entirely and migrates as a fan - a thin exploratory sheet that crosses ground
+ * it knows nothing about. Without the switch the withdrawal rule fires on every
+ * arm at once the moment the food runs out, and the whole organism retracts onto
+ * its own tubes and circulates there until it dies. Which is the loop.
+ */
+const FORAGE_AT = 0.3
+/** How long the colony takes to accept that there is nothing left here. */
+const FORAGE_LAG_MIN = 90
 /** How hard a withdrawing mote follows the tube network home. */
 const RETRACT_WEIGHT = 3.4
 /** Tube thickness at which "thicker, this way" stops being informative. */
@@ -1040,6 +1053,7 @@ export class Colony {
     this.slipField.clear()
     if (this.solids.length === 0) {
       this.obstacles = undefined
+      this.envGrid.setObstacles(null)
       return
     }
     const L = this.lattice
@@ -1132,6 +1146,9 @@ export class Colony {
         }
       }
     }
+    // The chemistry lattice needs the obstacles too, or a wall stops motes and
+    // nothing else.
+    this.envGrid.setObstacles((wx, wy, wz) => this.isSolid(wx, wy, wz))
     this.obstacles = {
       mask: mask.data,
       boundary: Int32Array.from(boundary),
@@ -1689,7 +1706,11 @@ export class Colony {
       // thicker network and so towards wherever the colony is actually feeding.
       // It also stops holding its own tube open, so the route it came out on is
       // reabsorbed behind it as it goes.
-      const withdrawing = this.starveMin[i] > WITHDRAW_AFTER_MIN && sat < 0.22
+      // ...and only while the colony still has somewhere better to be. Pulling
+      // an arm back into a body that is also starving achieves nothing except
+      // to stop it looking.
+      const withdrawing =
+        this.starveMin[i] > WITHDRAW_AFTER_MIN && sat < 0.22 && this.foraging < 0.5
       const here = this.voxel(x, y, z)
       const gripHere = this.gripField.data[here] / 255
       const onFloor = y < 2.2
@@ -1813,16 +1834,20 @@ export class Colony {
       // that stays dense, with an exploratory fringe reaching out of it. Inverting
       // this gives a cloud of independent foragers that never coalesces.
       const retract = withdrawing ? RETRACT_WEIGHT : 0
-      const cohesion = P.cohesion * (0.3 + 0.95 * sat) * (withdrawing ? 2.2 : 1)
+      const cohesion =
+        P.cohesion * (0.3 + 0.95 * sat) * (withdrawing ? 2.2 : 1) * (1 - 0.55 * this.foraging)
       // A hungry nucleus answers the call; a full one has no reason to.
       const recruitPull = P.recruitment * P.nutrientAffinity * (0.25 + 1.1 * (1 - sat))
+      // And it stops going round in circles: ground the colony has already
+      // worked is worth avoiding in proportion to how badly it needs new ground.
+      const searching = 1 + 2.2 * this.foraging
       const novelty = withdrawing
         ? 0
         : beside
-          ? 1.6 * (1 - sat)
+          ? 1.6 * (1 - sat) * searching
           : sat < 0.32
-            ? 1.5 * (0.32 - sat)
-            : 0
+            ? 1.5 * (0.32 - sat) * searching
+            : 0.35 * this.foraging
       // A fed mote looks where it is going. A starving one looks everywhere,
       // including backwards, which is how an unproductive branch finds its own
       // trail again and retracts along it towards the rest of the colony.
@@ -2015,12 +2040,17 @@ export class Colony {
       // front therefore advances at the speed of the mass, and the mass arrives
       // before the feeding does.
       const carried = michaelis(around, SUPPORT_KM)
+      const unsupportedFloor =
+        UNSUPPORTED_SPEED + (1 - UNSUPPORTED_SPEED) * 0.7 * this.foraging
       const stepLen =
         P.speed *
         motility *
         dt *
         4 *
-        (UNSUPPORTED_SPEED + (1 - UNSUPPORTED_SPEED) * carried) *
+        // A searching organism lets its nuclei off the leash: the fan it puts
+        // out is thin, and a thin sheet is exactly what cannot be supported by
+        // the mass around it.
+        (unsupportedFloor + (1 - unsupportedFloor) * carried) *
         // A nucleus that is feeding stays where the food is.
         (settled ? SETTLED_DRIFT : 1)
       let nx = x + hx * stepLen
@@ -2412,6 +2442,12 @@ export class Colony {
     const alive = sampled || 1
     this.fillCarb = fillC / alive
     this.fillProt = fillP / alive
+    // Exploit or explore. Smoothed over an hour and a half, because a colony
+    // that flips between the two every time a mote empties its stores would
+    // neither hold a network nor cross a plate.
+    const nourishment = 0.5 * (this.fillCarb + this.fillProt)
+    const wantForage = clamp(1 - nourishment / FORAGE_AT, 0, 1)
+    this.foraging += (wantForage - this.foraging) * Math.min(1, dt / FORAGE_LAG_MIN)
     this.meanPh = phSum / alive
     this.meanOsmo = osmoSum / alive
     this.meanToxin = toxSum / alive
@@ -2516,6 +2552,12 @@ export class Colony {
     if (doomed.length > 0) this.reclaimed += doomed.length
   }
 
+  /**
+   * 0 while there is food to be had, 1 once the colony has given up on where it
+   * is and committed to searching. Everything that holds the organism together
+   * is relaxed in proportion.
+   */
+  foraging = 0
   /** Bricks handed back over the colony's life, for the read-out. */
   reclaimed = 0
   /**
@@ -2749,6 +2791,7 @@ export class Colony {
       veinVolumeMm3: this.vein.countAbove(VEIN_VISIBLE, this.region),
       veinMass: this.vein.total(this.region),
       adhered: this.adheredCount,
+      foraging: this.foraging,
       airborne: this.airborneCount,
       tears: this.tears,
       solids: this.solids.length,
